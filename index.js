@@ -1,269 +1,226 @@
-import { extension_settings, getContext } from '../../../extensions.js';
+import { extension_settings } from '../../../extensions.js';
 import { saveSettingsDebounced } from '../../../../script.js';
 
-const extensionName = 'AvatarCropperMod';
-let settings;
-
-// 全局变量保存正在编辑的头像信息
-let currentEditingAvatar = {
-    filename: '',
-    src: '',
-    isUser: false
-};
-
-// 默认值
-const defaultCrop = { z: 1, x: 0, y: 0 };
-
-async function initExtension() {
-    // 1. 初始化设置
-    if (!extension_settings[extensionName]) {
-        extension_settings[extensionName] = { crops: {} };
-    }
-    settings = extension_settings[extensionName];
-
-    // 2. 注入全局样式和UI
-    updateGlobalCSS();
-    injectModalHTML();
-
-    // 3. 挂载各个注入点
-    injectCharacterPanelButton();
-    setupObservers();
+// 初始化当前插件的配置项空间
+if (!extension_settings.avatarPosAdjustments) {
+    extension_settings.avatarPosAdjustments = {};
 }
 
-/**
- * 核心：动态生成CSS，将保存的剪裁/偏移数据应用到全局所有对应头像上
- */
-function updateGlobalCSS() {
-    let styleTag = document.getElementById('st-avatar-crop-style');
+// 获取不带参数的纯净 Avatar ID（如：Alice.png, User.png）
+function getAvatarIdFromSrc(src) {
+    try {
+        let cleanSrc = src.split('?')[0];
+        const parts = cleanSrc.split('/');
+        return decodeURIComponent(parts[parts.length - 1]);
+    } catch (e) {
+        return src;
+    }
+}
+
+// 核心函数：动态生成并应用 CSS 样式，覆盖聊天区的头像
+function updateAvatarStyles() {
+    const theme = localStorage.getItem('theme') || 'default';
+    const adjustments = extension_settings.avatarPosAdjustments[theme] || {};
+
+    let cssString = '';
+    for (const [avatarId, position] of Object.entries(adjustments)) {
+        // 应对可能有空格和特殊字符的情况，生成精确的 CSS 规则
+        const escapedId = avatarId.replace(/"/g, '\\"');
+        const encodedId = encodeURIComponent(avatarId).replace(/"/g, '\\"');
+
+        // 应用于 #chat 聊天流中，以及右侧头像面板可能显示的地方
+        cssString += `
+            #chat .avatar img[src*="${escapedId}"],
+            #chat .avatar img[src*="${encodedId}"],
+            #sheld .avatar img[src*="${escapedId}"],
+            #sheld .avatar img[src*="${encodedId}"] {
+                object-position: ${position.x}% ${position.y}% !important;
+            }
+        `;
+    }
+
+    let styleTag = document.getElementById('custom-avatar-pos-style');
     if (!styleTag) {
         styleTag = document.createElement('style');
-        styleTag.id = 'st-avatar-crop-style';
+        styleTag.id = 'custom-avatar-pos-style';
         document.head.appendChild(styleTag);
     }
-
-    let css = '';
-    for (const [filename, data] of Object.entries(settings.crops)) {
-        // 只针对常见的头像元素应用，避免误伤其他图片，并排除了预览框中的图片
-        const encodedFilename = encodeURIComponent(filename).replace(/[']/g, "\\'");
-        const decodedFilename = decodeURIComponent(filename).replace(/[']/g, "\\'");
-        
-        // 匹配原始文件名或URL编码后的文件名
-        const targetClasses = [
-            `.avatar img[src*="${encodedFilename}"]:not(#st-ac-preview)`,
-            `.avatar img[src*="${decodedFilename}"]:not(#st-ac-preview)`,
-            `.zoomed_avatar[src*="${encodedFilename}"]:not(#st-ac-preview)`,
-            `.zoomed_avatar[src*="${decodedFilename}"]:not(#st-ac-preview)`,
-            `#avatar_img[src*="${encodedFilename}"]:not(#st-ac-preview)`,
-            `#avatar_img[src*="${decodedFilename}"]:not(#st-ac-preview)`,
-            `.avatar-container img[src*="${encodedFilename}"]:not(#st-ac-preview)`,
-            `.avatar-container img[src*="${decodedFilename}"]:not(#st-ac-preview)`
-        ];
-        
-        css += `${targetClasses.join(', ')} { transform: scale(${data.z}) translate(${data.x}%, ${data.y}%) !important; }\n`;
-    }
-    styleTag.innerHTML = css;
+    styleTag.textContent = cssString;
 }
 
-/**
- * 创建用于剪裁的弹窗面板
- */
-function injectModalHTML() {
-    const modalHTML = `
-        <div id="st-ac-modal" class="popup wide_dialog_popup" style="display:none; position:fixed; z-index:99999; top:50%; left:50%; transform:translate(-50%, -50%);">
-            <h3><i class="fa-solid fa-crop-simple"></i> 调整头像位置与大小</h3>
-            <div class="st-ac-preview-wrapper">
-                <img id="st-ac-preview" src="">
-            </div>
-            
-            <div class="st-ac-controls">
-                <div class="st-ac-range-row">
-                    <label>放大 (Zoom):</label>
-                    <input type="range" id="st-ac-z" min="1" max="4" step="0.05" value="1">
-                </div>
-                <div class="st-ac-range-row">
-                    <label>水平 (X轴):</label>
-                    <input type="range" id="st-ac-x" min="-50" max="50" step="1" value="0">
-                </div>
-                <div class="st-ac-range-row">
-                    <label>垂直 (Y轴):</label>
-                    <input type="range" id="st-ac-y" min="-50" max="50" step="1" value="0">
-                </div>
-            </div>
+// 检查更换主题 (SillyTavern部分版本没有暴露专门的Theme改变事件，轮询 localStorage 是最轻量稳妥的办法)
+let lastTheme = localStorage.getItem('theme');
+setInterval(() => {
+    const currentTheme = localStorage.getItem('theme');
+    if (currentTheme !== lastTheme) {
+        lastTheme = currentTheme;
+        updateAvatarStyles();
+    }
+}, 1000);
 
-            <div class="st-ac-buttons">
-                <div id="st-ac-close" class="menu_button menu_button_icon"><i class="fa-solid fa-xmark"></i> 取消</div>
-                <div id="st-ac-reset" class="menu_button menu_button_icon"><i class="fa-solid fa-rotate-left"></i> 重置</div>
-                <div id="st-ac-save" class="menu_button menu_button_icon"><i class="fa-solid fa-check"></i> 保存全局应用</div>
+// ======================== UI 构建与逻辑 ======================== //
+
+let currentEditingAvatarSrc = '';
+let currentEditingAvatarId = '';
+
+function buildCropModal() {
+    if (document.getElementById('st-avatar-crop-modal')) return;
+
+    const modalHTML = `
+        <div id="st-avatar-crop-modal">
+            <div class="popup-content">
+                <h3>调整头像显示位置</h3>
+                <div id="st-avatar-crop-preview-wrapper">
+                    <img id="st-avatar-crop-preview-img" src="">
+                    <div class="st-avatar-crop-grid"></div>
+                </div>
+                <div class="st-avatar-crop-controls">
+                    <label>左右 (X): <input type="range" id="st-avatar-crop-x" min="0" max="100" value="50"></label>
+                    <label>上下 (Y): <input type="range" id="st-avatar-crop-y" min="0" max="100" value="50"></label>
+                </div>
+                <div class="st-avatar-crop-buttons">
+                    <button id="st-avatar-crop-cancel">取消</button>
+                    <button id="st-avatar-crop-reset">重置为居中</button>
+                    <button id="st-avatar-crop-save">保存应用</button>
+                </div>
             </div>
         </div>
-        <div id="st-ac-overlay" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:99998;"></div>
     `;
-
     document.body.insertAdjacentHTML('beforeend', modalHTML);
 
-    // 绑定事件
-    const inputs = ['st-ac-z', 'st-ac-x', 'st-ac-y'];
-    inputs.forEach(id => {
-        document.getElementById(id).addEventListener('input', updatePreview);
+    const previewImg = document.getElementById('st-avatar-crop-preview-img');
+    const xSlider = document.getElementById('st-avatar-crop-x');
+    const ySlider = document.getElementById('st-avatar-crop-y');
+
+    // 实时预览更新
+    const updatePreview = () => {
+        previewImg.style.objectPosition = `${xSlider.value}% ${ySlider.value}%`;
+    };
+
+    xSlider.addEventListener('input', updatePreview);
+    ySlider.addEventListener('input', updatePreview);
+
+    // 拖拽画布逻辑
+    let isDragging = false;
+    let startMouseX = 0, startMouseY = 0;
+    let startPosX = 50, startPosY = 50;
+
+    previewImg.addEventListener('mousedown', (e) => {
+        isDragging = true;
+        startMouseX = e.clientX;
+        startMouseY = e.clientY;
+        startPosX = parseFloat(xSlider.value);
+        startPosY = parseFloat(ySlider.value);
+        e.preventDefault();
     });
 
-    document.getElementById('st-ac-close').addEventListener('click', closeModal);
-    document.getElementById('st-ac-overlay').addEventListener('click', closeModal);
-    
-    document.getElementById('st-ac-reset').addEventListener('click', () => {
-        document.getElementById('st-ac-z').value = 1;
-        document.getElementById('st-ac-x').value = 0;
-        document.getElementById('st-ac-y').value = 0;
+    document.addEventListener('mousemove', (e) => {
+        if (!isDragging) return;
+        let dx = e.clientX - startMouseX;
+        let dy = e.clientY - startMouseY;
+
+        // 乘数 0.5 作为灵敏度。向下滑动鼠标等于想看图片上部，因此 Y 百分比应当减小
+        let newX = startPosX - (dx * 0.5);
+        let newY = startPosY - (dy * 0.5);
+
+        xSlider.value = Math.max(0, Math.min(100, newX));
+        ySlider.value = Math.max(0, Math.min(100, newY));
         updatePreview();
     });
 
-    document.getElementById('st-ac-save').addEventListener('click', () => {
-        const z = parseFloat(document.getElementById('st-ac-z').value);
-        const x = parseFloat(document.getElementById('st-ac-x').value);
-        const y = parseFloat(document.getElementById('st-ac-y').value);
+    document.addEventListener('mouseup', () => { isDragging = false; });
+
+    // 按钮事件
+    document.getElementById('st-avatar-crop-cancel').addEventListener('click', () => {
+        document.getElementById('st-avatar-crop-modal').style.display = 'none';
+    });
+
+    document.getElementById('st-avatar-crop-reset').addEventListener('click', () => {
+        xSlider.value = 50;
+        ySlider.value = 50;
+        updatePreview();
+    });
+
+    document.getElementById('st-avatar-crop-save').addEventListener('click', () => {
+        const theme = localStorage.getItem('theme') || 'default';
+        if (!extension_settings.avatarPosAdjustments[theme]) {
+            extension_settings.avatarPosAdjustments[theme] = {};
+        }
+
+        extension_settings.avatarPosAdjustments[theme][currentEditingAvatarId] = {
+            x: parseFloat(xSlider.value),
+            y: parseFloat(ySlider.value)
+        };
         
-        settings.crops[currentEditingAvatar.filename] = { z, x, y };
         saveSettingsDebounced();
-        updateGlobalCSS();
-        closeModal();
+        updateAvatarStyles(); // 立即应用到界面
+        document.getElementById('st-avatar-crop-modal').style.display = 'none';
     });
 }
 
-function updatePreview() {
-    const z = document.getElementById('st-ac-z').value;
-    const x = document.getElementById('st-ac-x').value;
-    const y = document.getElementById('st-ac-y').value;
-    document.getElementById('st-ac-preview').style.transform = `scale(${z}) translate(${x}%, ${y}%)`;
+function openCropModal(imgSrc) {
+    currentEditingAvatarSrc = imgSrc;
+    currentEditingAvatarId = getAvatarIdFromSrc(imgSrc);
+
+    const theme = localStorage.getItem('theme') || 'default';
+    const savedData = (extension_settings.avatarPosAdjustments[theme] || {})[currentEditingAvatarId] || { x: 50, y: 50 };
+
+    // 获取并套用酒馆当前的头像圆角形状设定，让预览框真实反应聊天窗状态
+    const rounding = getComputedStyle(document.body).getPropertyValue('--avatar-rounding') || '50%';
+    document.getElementById('st-avatar-crop-preview-wrapper').style.borderRadius = rounding;
+
+    document.getElementById('st-avatar-crop-preview-img').src = currentEditingAvatarSrc;
+    document.getElementById('st-avatar-crop-x').value = savedData.x;
+    document.getElementById('st-avatar-crop-y').value = savedData.y;
+    document.getElementById('st-avatar-crop-preview-img').style.objectPosition = `${savedData.x}% ${savedData.y}%`;
+
+    document.getElementById('st-avatar-crop-modal').style.display = 'flex';
 }
 
-function openModal(filename, src) {
-    currentEditingAvatar = { filename, src };
-    const data = settings.crops[filename] || defaultCrop;
-    
-    document.getElementById('st-ac-preview').src = src;
-    document.getElementById('st-ac-z').value = data.z;
-    document.getElementById('st-ac-x').value = data.x;
-    document.getElementById('st-ac-y').value = data.y;
-    
-    updatePreview();
-    
-    $('#st-ac-overlay').fadeIn(200);
-    $('#st-ac-modal').fadeIn(200);
-}
+function injectCropButton(zoomedDiv) {
+    // 避免重复注入
+    if (zoomedDiv.querySelector('#st-avatar-crop-btn')) return;
 
-function closeModal() {
-    $('#st-ac-overlay').fadeOut(200);
-    $('#st-ac-modal').fadeOut(200);
-}
+    const btn = document.createElement('div');
+    btn.id = 'st-avatar-crop-btn';
+    btn.innerHTML = '<i class="fa-solid fa-crop"></i> 位置剪裁';
+    btn.title = '调整在聊天框的显示位置（支持拖拽）';
 
-/**
- * 注入点 1：角色详情界面 (Avatar Controls)
- */
-function injectCharacterPanelButton() {
-    // 持续检测面板以确保注入
-    const interval = setInterval(() => {
-        const target = document.querySelector("#avatar_controls > div");
-        if (target && !document.getElementById('st-ac-char-btn')) {
-            const btn = document.createElement('div');
-            btn.id = 'st-ac-char-btn';
-            btn.className = 'menu_button';
-            btn.innerHTML = '<i class="fa-solid fa-crop-simple"></i> 调整大小';
-            btn.title = "调整此角色的头像大小和位置";
-            btn.onclick = () => {
-                const context = getContext();
-                const charId = context.characterId;
-                if (charId === undefined) return;
-                const char = context.characters[charId];
-                if (!char) return;
-                const filename = char.avatar;
-                openModal(filename, `/characters/${filename}`);
-            };
-            target.appendChild(btn);
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation(); // 防止触发点击关闭 zoomed_avatar
+        const img = zoomedDiv.querySelector('img');
+        if (img) {
+            openCropModal(img.src);
         }
-    }, 1000);
+    });
+
+    zoomedDiv.appendChild(btn);
 }
 
-/**
- * 设置观察器以处理动态生成的元素 (Zoomed头像 和 User Persona列表)
- */
-function setupObservers() {
-    // 监听DOM变动
+// 核心加载入口
+jQuery(async () => {
+    // 首次加载应用现存 CSS
+    updateAvatarStyles();
+
+    // 构建设置 UI 模态框
+    buildCropModal();
+
+    // 使用 MutationObserver 监听酒馆全屏图片预览 (zoomed_avatar) 出现的时机
     const observer = new MutationObserver((mutations) => {
-        mutations.forEach(m => {
-            // 1. 处理聊天栏图片点击放大的注入
-            m.addedNodes.forEach(node => {
-                if (node.tagName === 'IMG' && node.classList && node.classList.contains('zoomed_avatar')) {
-                    injectZoomedAvatarButton(node);
+        mutations.forEach((mutation) => {
+            mutation.addedNodes.forEach((node) => {
+                if (node.nodeType === Node.ELEMENT_NODE) {
+                    if (node.classList.contains('zoomed_avatar')) {
+                        injectCropButton(node);
+                    } else {
+                        // 有时候可能是子元素
+                        const zoomed = node.querySelector('.zoomed_avatar');
+                        if (zoomed) injectCropButton(zoomed);
+                    }
                 }
             });
-            
-            // 2. 处理User Persona列表的注入
-            if (document.getElementById('user_avatar_block')) {
-                injectPersonaButtons();
-            }
         });
     });
 
     observer.observe(document.body, { childList: true, subtree: true });
-}
-
-/**
- * 注入点 2：点击放大头像后的右上角悬浮按钮
- */
-function injectZoomedAvatarButton(imgNode) {
-    const btn = document.createElement('div');
-    btn.innerHTML = '<i class="fa-solid fa-crop-simple"></i>';
-    btn.className = 'menu_button st-ac-floating-btn';
-    btn.title = "调整头像";
-    
-    btn.onclick = (e) => {
-        e.stopPropagation(); // 防止点击后触发关闭放大
-        const src = imgNode.getAttribute('src');
-        const filename = decodeURIComponent(src.split('/').pop());
-        openModal(filename, src);
-        // 如果想在编辑时关闭原来的放大图片，可以取消下面这行的注释
-        // document.body.click(); 
-    };
-    
-    document.body.appendChild(btn);
-
-    // 当图片消失时，也清理掉悬浮按钮
-    const removalObserver = new MutationObserver(() => {
-        if (!document.body.contains(imgNode)) {
-            btn.remove();
-            removalObserver.disconnect();
-        }
-    });
-    removalObserver.observe(document.body, { childList: true, subtree: true });
-}
-
-/**
- * 注入点 3：User/Persona 控制面板按钮
- */
-function injectPersonaButtons() {
-    const blocks = document.querySelectorAll("#user_avatar_block .avatar-container .buttons_block");
-    blocks.forEach(block => {
-        // 防止重复注入
-        if (block.querySelector('.st-ac-persona-btn')) return;
-        
-        const btn = document.createElement('div');
-        btn.className = 'st-ac-persona-btn fa-solid fa-crop-simple';
-        btn.title = "调整此Persona的头像显示大小";
-        
-        btn.onclick = (e) => {
-            e.stopPropagation(); 
-            const container = block.closest('.avatar-container');
-            const filename = container.getAttribute('data-avatar-id');
-            // User 头像一般在 "User Avatars" 文件夹下
-            const src = `/User Avatars/${filename}`;
-            openModal(filename, src);
-        };
-        
-        block.appendChild(btn);
-    });
-}
-
-// 启动扩展
-jQuery(async () => {
-    await initExtension();
 });
