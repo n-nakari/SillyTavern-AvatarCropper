@@ -1,0 +1,11 @@
+{
+    "display_name": "SillyTavern-AvatarCropper",
+    "loading_order": 1,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "Nakari",
+    "version": "1.0.0",
+    "homePage": "https://github.com/n-nakari/SillyTavern-Layout"
+}
