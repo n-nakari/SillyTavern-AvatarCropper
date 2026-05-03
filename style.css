@@ -1,13 +1,14 @@
+.zoomed_avatar .panelControlBar .drag-grabber,
+.zoomed_avatar .panelControlBar .dragClose,
 #st-native-crop-btn {
-    cursor: pointer;
-    padding: 10px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    filter: none !important;
     opacity: 1 !important;
 }
 
-.zoomed_avatar .panelControlBar .drag-grabber, .zoomed_avatar .panelControlBar .dragClose {
-    opacity: 1 !important;
-    filter: none !important;
+#st-native-crop-btn {
+    cursor: pointer;
+    align-items: center;
+    justify-content: center;
+    padding: 0 5px;
+    font-size: calc(var(--mainFontSize)*1.3);
 }
