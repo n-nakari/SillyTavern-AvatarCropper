@@ -1,27 +1,118 @@
-/* 聊天界面放大头像时的剪裁按钮样式 */
-.zoomed-avatar-crop-btn {
-    position: absolute;
-    top: 15px;
-    right: 15px;
-    z-index: 10000;
-    background-color: var(--SmartThemeBlurTintColor, rgba(0, 0, 0, 0.7));
-    color: white;
-    border: 1px solid var(--SmartThemeBorderColor);
-    border-radius: 5px;
-    padding: 8px 15px;
-    cursor: pointer;
-    font-size: 14px;
-    backdrop-filter: blur(5px);
-    transition: all 0.2s;
+/* 修改器主窗口 */
+#st-ac-modal {
+    background-color: var(--SmartThemeBlurTintColor, rgba(0, 0, 0, 0.8));
+    backdrop-filter: blur(10px);
+    color: var(--SmartThemeBodyColor, #fff);
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.2));
+    border-radius: 10px;
+    padding: 20px;
+    width: 350px;
+    box-shadow: 0 4px 25px rgba(0,0,0,0.5);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
 }
 
-.zoomed-avatar-crop-btn:hover {
-    background-color: var(--SmartThemeBodyColor, rgba(50, 50, 50, 0.9));
-    transform: scale(1.05);
+#st-ac-modal h3 {
+    margin-top: 0;
+    margin-bottom: 20px;
+    font-size: 1.2rem;
+    text-align: center;
 }
 
-/* 角色控制区和Persona区的按钮微调 */
-.inline-crop-btn {
-    margin-left: 5px;
+/* 预览圆形容器 (模拟酒馆聊天里的头像表现) */
+.st-ac-preview-wrapper {
+    width: 150px;
+    height: 150px;
+    border-radius: 50%;
+    overflow: hidden;
+    border: 3px solid var(--SmartThemeBorderColor, #888);
+    margin-bottom: 25px;
+    background-color: rgba(0,0,0,0.3);
+    flex-shrink: 0;
+}
+
+#st-ac-preview {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transform-origin: center;
+    /* transition: transform 0.1s ease-out; */ /* 如果拖拽感觉卡可以启用 */
+}
+
+/* 调节条区域 */
+.st-ac-controls {
+    width: 100%;
+    margin-bottom: 25px;
+}
+
+.st-ac-range-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.st-ac-range-row label {
+    width: 100px;
+    font-weight: bold;
+    font-size: 0.9rem;
+    opacity: 0.9;
+}
+
+.st-ac-range-row input[type="range"] {
+    flex-grow: 1;
     cursor: pointer;
+}
+
+/* 底部按钮组 */
+.st-ac-buttons {
+    display: flex;
+    justify-content: space-between;
+    width: 100%;
+    gap: 10px;
+}
+
+.st-ac-buttons .menu_button {
+    flex: 1;
+    text-align: center;
+    padding: 8px 0;
+    font-size: 0.9rem;
+}
+
+/* Persona 列表上的微型按钮 */
+.st-ac-persona-btn {
+    cursor: pointer;
+    margin-left: 8px;
+    opacity: 0.5;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+    font-size: 0.9em;
+}
+
+.st-ac-persona-btn:hover {
+    opacity: 1;
+    transform: scale(1.2);
+    color: var(--SmartThemeButtonTextHoverColor, #fff);
+}
+
+/* 放大图片的悬浮剪裁按钮 */
+.st-ac-floating-btn {
+    position: fixed;
+    top: 30px;
+    right: 30px;
+    width: 45px;
+    height: 45px;
+    border-radius: 50% !important;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 999999; /* 必须比zoomed_avatar的z-index大 */
+    font-size: 1.2rem;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+    background-color: var(--SmartThemeBlurTintColor, rgba(0,0,0,0.7)) !important;
+    color: var(--SmartThemeBodyColor, #fff);
+    transition: transform 0.2s ease;
+}
+
+.st-ac-floating-btn:hover {
+    transform: scale(1.15);
 }
