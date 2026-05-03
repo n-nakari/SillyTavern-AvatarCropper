@@ -3,9 +3,11 @@
 #st-native-crop-btn {
     filter: none !important;
     opacity: 1 !important;
-    .fa-solid {
-        font-size: calc(var(--mainFontSize)*1.3) !important;
-    }
+    font-size: calc(var(--mainFontSize)*1.3) !important;
+}
+
+.zoomed_avatar .panelControlBar .dragClose.fa-solid {
+    font-size: calc(var(--mainFontSize)*1.3) !important;
 }
 
 body .panelControlBar {
