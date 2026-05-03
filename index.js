@@ -1,6 +1,9 @@
 import { extension_settings } from '../../../extensions.js';
 import { saveSettingsDebounced } from '../../../../script.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
+// 引入酒馆的斜杠命令系统，用于我们注册清理命令
+import { SlashCommandParser } from '../../../../slash-commands/SlashCommandParser.js';
+import { SlashCommand } from '../../../../slash-commands/SlashCommand.js';
 
 if (!extension_settings.avatarCroppedImages) {
     extension_settings.avatarCroppedImages = {};
@@ -38,7 +41,6 @@ function applyCroppedAvatars() {
     const croppedData = extension_settings.avatarCroppedImages[theme] || {};
 
     let cssString = '';
-    
     for (const [avatarId, base64Image] of Object.entries(croppedData)) {
         const escapedId = avatarId.replace(/"/g, '\\"');
         const encodedId = encodeURIComponent(avatarId).replace(/"/g, '\\"');
@@ -60,7 +62,6 @@ function applyCroppedAvatars() {
         styleTag.id = 'custom-avatar-crop-style';
         document.head.appendChild(styleTag);
     }
-    
     styleTag.textContent = cssString;
 }
 
@@ -77,8 +78,7 @@ async function triggerNativeCropPopup(imgSrc) {
     const avatarId = getAvatarIdFromSrc(imgSrc);
     const base64Original = await getBase64FromUrl(imgSrc);
 
-    // 1. 去掉 cropAspect: 1 限制，解绑 1:1 比例，激活四侧边框的自由拉伸
-    // 注意这里没有用 await，是为了让代码继续往下走去修改 DOM
+    // 【修改 1】：去掉了 cropAspect: 1，解除了强制 1:1 的锁定，现在可以自由拉伸四条边
     const popupPromise = callGenericPopup(
         '', 
         POPUP_TYPE.CROP, 
@@ -86,23 +86,21 @@ async function triggerNativeCropPopup(imgSrc) {
         { cropImage: base64Original } 
     );
 
-    // 2. 核心魔法：轮询寻找弹窗中的 Cropper 实例，找到后修改内部模式
-    let attempts = 0;
-    const hackCropperInterval = setInterval(() => {
-        // Cropper.js 会把原始 img 加上 cropper-hidden 类
-        const img = document.querySelector('#dialogue_popup img.cropper-hidden');
-        if (img && img.cropper) {
-            // 将鼠标操作模式改为 'move'：这样在选取框外部点击拖拽时，就是平移图片，而不是画新框！
-            img.cropper.setDragMode('move');
-            clearInterval(hackCropperInterval);
+    // 【修改 2】：使用黑科技，在弹窗打开 150 毫秒后，拦截底层的 Cropper 实例并修改配置
+    setTimeout(() => {
+        const popup = document.getElementById('dialogue_popup');
+        if (popup) {
+            // 寻找挂载了 cropper 实例的图片节点
+            const img = popup.querySelector('img.cropper-hidden');
+            if (img && img.cropper) {
+                // 强制将拖拽模式改为 'move' (平移画布模式)
+                // 这意味着：你在九宫格选区外按住鼠标/手指，会拖拽整张图片，而不是画一个新框！
+                img.cropper.setDragMode('move');
+            }
         }
-        attempts++;
-        if (attempts > 50) clearInterval(hackCropperInterval); // 防止死循环（5秒后放弃）
-    }, 100);
+    }, 150);
 
-    // 3. 等待用户完成裁剪点击“确定”
     const croppedImageBase64 = await popupPromise;
-    clearInterval(hackCropperInterval); // 用户操作完毕，清理定时器
 
     if (croppedImageBase64) {
         const theme = getCurrentTheme(); 
@@ -114,7 +112,6 @@ async function triggerNativeCropPopup(imgSrc) {
         
         saveSettingsDebounced();
         applyCroppedAvatars(); 
-        
         toastr.success('头像已保存');
     }
 }
@@ -149,6 +146,24 @@ function injectCropButton(zoomedDiv) {
 
 jQuery(async () => {
     applyCroppedAvatars();
+
+    // 【新增功能】：注册清理缓存的斜杠命令
+    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+        name: 'crop-clear',
+        helpString: '清除当前美化主题下所有的头像剪裁缓存数据，恢复全部默认头像。',
+        callback: () => {
+            const theme = getCurrentTheme();
+            if (extension_settings.avatarCroppedImages && extension_settings.avatarCroppedImages[theme]) {
+                delete extension_settings.avatarCroppedImages[theme];
+                saveSettingsDebounced();
+                applyCroppedAvatars(); // 触发页面更新
+                toastr.success(`已清空主题 [${theme}] 下的所有剪裁缓存！`);
+            } else {
+                toastr.info('当前主题没有剪裁缓存，无需清理。');
+            }
+            return '';
+        }
+    }));
 
     const observer = new MutationObserver((mutations) => {
         mutations.forEach((mutation) => {
