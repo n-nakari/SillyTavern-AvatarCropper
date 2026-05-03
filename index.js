@@ -2,10 +2,13 @@ import { extension_settings } from '../../../extensions.js';
 import { saveSettingsDebounced } from '../../../../script.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
-if (!extension_settings.avatarCroppedImages) {
-    extension_settings.avatarCroppedImages = {};
+// 给插件分配一个独立的数据空间，防止与酒馆其他插件冲突
+const EXT_NAME = 'st-avatar-cropper';
+if (!extension_settings[EXT_NAME]) {
+    extension_settings[EXT_NAME] = { avatarCroppedImages: {} };
 }
 
+// 提取纯净的 Avatar ID (这正是 SillyTavern 底层区分不同角色/Persona 的唯一代码 ID)
 function getAvatarIdFromSrc(src) {
     try {
         let cleanSrc = src.split('?')[0];
@@ -16,6 +19,7 @@ function getAvatarIdFromSrc(src) {
     }
 }
 
+// 将网络图片转换为 Base64，供裁剪器读取
 async function getBase64FromUrl(url) {
     const data = await fetch(url);
     const blob = await data.blob();
@@ -28,15 +32,20 @@ async function getBase64FromUrl(url) {
     });
 }
 
+// 核心：读取当前主题数据，生成 CSS 替换头像
 function applyCroppedAvatars() {
     const theme = localStorage.getItem('theme') || 'default';
-    const croppedData = extension_settings.avatarCroppedImages[theme] || {};
+    
+    // 严格匹配：只读取当前“主题”下的数据。如果没有，就获取空对象
+    const croppedData = extension_settings[EXT_NAME].avatarCroppedImages[theme] || {};
 
     let cssString = '';
+    // 如果 croppedData 为空，循环不会执行，cssString 为空，头像自动恢复酒馆原生样式
     for (const [avatarId, base64Image] of Object.entries(croppedData)) {
         const escapedId = avatarId.replace(/"/g, '\\"');
         const encodedId = encodeURIComponent(avatarId).replace(/"/g, '\\"');
 
+        // 通过 CSS content 直接替换对应的唯一 ID 头像
         cssString += `
             #chat .avatar img[src*="${escapedId}"],
             #chat .avatar img[src*="${encodedId}"],
@@ -54,23 +63,26 @@ function applyCroppedAvatars() {
         styleTag.id = 'custom-avatar-crop-style';
         document.head.appendChild(styleTag);
     }
+    // 注入 CSS。若切换到无剪裁数据的主题，这里会被覆盖为空，恢复默认样式
     styleTag.textContent = cssString;
 }
 
+// 轮询检查主题是否发生切换
 let lastTheme = localStorage.getItem('theme');
 setInterval(() => {
     const currentTheme = localStorage.getItem('theme');
     if (currentTheme !== lastTheme) {
         lastTheme = currentTheme;
-        applyCroppedAvatars();
+        applyCroppedAvatars(); // 检测到切换，立即重新评估样式
     }
 }, 1000);
 
+// 触发内置高级裁剪弹窗
 async function triggerNativeCropPopup(imgSrc) {
-    const avatarId = getAvatarIdFromSrc(imgSrc);
+    const avatarId = getAvatarIdFromSrc(imgSrc); // 获取唯一代码 ID
     const base64Original = await getBase64FromUrl(imgSrc);
 
-    // 第一个参数设为 ''，去除弹窗标题
+    // 调用酒馆内置裁剪器。第一个参数设为 '' 去除大标题
     const croppedImageBase64 = await callGenericPopup(
         '', 
         POPUP_TYPE.CROP, 
@@ -78,13 +90,15 @@ async function triggerNativeCropPopup(imgSrc) {
         { cropAspect: 1, cropImage: base64Original }
     );
 
+    // 如果用户点击确定并返回了裁剪图
     if (croppedImageBase64) {
         const theme = localStorage.getItem('theme') || 'default';
-        if (!extension_settings.avatarCroppedImages[theme]) {
-            extension_settings.avatarCroppedImages[theme] = {};
+        if (!extension_settings[EXT_NAME].avatarCroppedImages[theme]) {
+            extension_settings[EXT_NAME].avatarCroppedImages[theme] = {};
         }
 
-        extension_settings.avatarCroppedImages[theme][avatarId] = croppedImageBase64;
+        // 完美绑定：主题名称 -> 唯一代码ID -> 裁剪图片
+        extension_settings[EXT_NAME].avatarCroppedImages[theme][avatarId] = croppedImageBase64;
         
         saveSettingsDebounced();
         applyCroppedAvatars(); 
@@ -93,10 +107,10 @@ async function triggerNativeCropPopup(imgSrc) {
     }
 }
 
+// 注入按钮到大图预览的控制栏中
 function injectCropButton(zoomedDiv) {
     if (zoomedDiv.querySelector('#st-native-crop-btn')) return;
 
-    // 寻找控制栏
     const controlBar = zoomedDiv.querySelector('.panelControlBar');
     if (!controlBar) return;
 
@@ -109,20 +123,20 @@ function injectCropButton(zoomedDiv) {
         e.stopPropagation(); 
         const img = zoomedDiv.querySelector('img');
         if (img) {
-            zoomedDiv.click(); // 关闭放大预览
+            zoomedDiv.click(); // 点击后隐藏放大预览框
             await triggerNativeCropPopup(img.src);
         }
     });
 
-    // 插入到控制栏中（将其放在关闭按钮前面，或者直接添加到末尾）
     const closeBtn = controlBar.querySelector('.dragClose');
     if (closeBtn) {
-        controlBar.insertBefore(btn, closeBtn);
+        controlBar.insertBefore(btn, closeBtn); // 插入到关闭按钮的前面
     } else {
         controlBar.appendChild(btn);
     }
 }
 
+// 插件启动初始化
 jQuery(async () => {
     applyCroppedAvatars();
 
