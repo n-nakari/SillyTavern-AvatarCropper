@@ -30,40 +30,38 @@ body .panelControlBar {
 }
 
 /* =========================================
-   破解原生 Cropper.js 限制，极大扩展触控热区
+   破解原生 Cropper.js 限制：极大扩展触控热区
    ========================================= */
-.cropper-line { background-color: transparent !important; }
-.cropper-line.line-e { width: 20px !important; right: -10px !important; }
-.cropper-line.line-n { height: 20px !important; top: -10px !important; }
-.cropper-line.line-w { width: 20px !important; left: -10px !important; }
-.cropper-line.line-s { height: 20px !important; bottom: -10px !important; }
-
-.cropper-point {
-    width: 30px !important;
-    height: 30px !important;
-    background-color: #3399ff !important; /* 蓝色可视锚点 */
-    opacity: 0.8 !important;
-    border-radius: 50% !important; /* 圆形更好看 */
+/* 让边框的透明触控区域向外延伸 15px，极容易抓取 */
+.cropper-line::after {
+    content: '';
+    position: absolute;
+    top: -15px; right: -15px; bottom: -15px; left: -15px;
+    background: transparent;
 }
-.cropper-point.point-e { right: -15px !important; margin-top: -15px !important; }
-.cropper-point.point-n { top: -15px !important; margin-left: -15px !important; }
-.cropper-point.point-w { left: -15px !important; margin-top: -15px !important; }
-.cropper-point.point-s { bottom: -15px !important; margin-left: -15px !important; }
-.cropper-point.point-ne { top: -15px !important; right: -15px !important; }
-.cropper-point.point-nw { top: -15px !important; left: -15px !important; }
-.cropper-point.point-sw { bottom: -15px !important; left: -15px !important; }
-.cropper-point.point-se { bottom: -15px !important; right: -15px !important; width: 40px !important; height: 40px !important;}
+/* 美化控制点，并让周围 20px 都能触发拖拽 */
+.cropper-point {
+    width: 12px !important;
+    height: 12px !important;
+    background-color: #3399ff !important;
+    border-radius: 50% !important;
+    opacity: 0.9 !important;
+}
+.cropper-point::after {
+    content: '';
+    position: absolute;
+    top: -20px; right: -20px; bottom: -20px; left: -20px;
+    background: transparent;
+}
+.cropper-point.point-se { width: 16px !important; height: 16px !important; }
 
 /* =========================================
    替换卡面（Alt Avatars）面板 UI
    ========================================= */
+/* 新增的控制栏左侧按钮 */
 #st-alt-avatar-btn {
-    margin-right: auto;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    padding: 8px 12px;
+    margin-right: auto !important; /* 强制靠左 */
+    color: #4CAF50; /* 给点颜色区分 */
 }
 
 #st-alt-avatar-panel .alt-avatar-grid {
@@ -71,7 +69,7 @@ body .panelControlBar {
     grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
     gap: 15px;
     margin-top: 15px;
-    max-height: 60vh;
+    max-height: 50vh;
     overflow-y: auto;
     padding: 10px;
 }
@@ -88,8 +86,13 @@ body .panelControlBar {
 }
 
 #st-alt-avatar-panel .alt-avatar-item:hover { transform: scale(1.05); }
-#st-alt-avatar-panel .alt-avatar-item.selected { border-color: #4CAF50; box-shadow: 0 0 12px #4CAF50; }
-#st-alt-avatar-panel .alt-avatar-item img { width: 100%; height: 100%; object-fit: cover; }
+#st-alt-avatar-panel .alt-avatar-item.selected { 
+    border-color: #4CAF50; 
+    box-shadow: 0 0 12px rgba(76, 175, 80, 0.8); 
+}
+#st-alt-avatar-panel .alt-avatar-item img { 
+    width: 100%; height: 100%; object-fit: cover; 
+}
 
 #st-alt-avatar-panel .delete-btn {
     display: none;
@@ -105,7 +108,7 @@ body .panelControlBar {
 }
 #st-alt-avatar-panel .delete-btn:hover { background: red; transform: scale(1.1); }
 
-/* 开启管理模式时，显示除原图外的删除按钮 */
+/* 管理模式时，显示删除按钮 (第一张原图除外) */
 #st-alt-avatar-panel .alt-avatar-grid.delete-mode .alt-avatar-item:not(.original-item) .delete-btn {
     display: block;
 }
