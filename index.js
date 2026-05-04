@@ -185,6 +185,7 @@ async function openAltAvatarPanel() {
                 <div style="display:flex; gap:10px; align-items:center;">
                     <div class="menu_button menu_button_icon margin0" id="btn-alt-upload" title="上传图片"><i class="fa-solid fa-upload"></i></div>
                     <div class="menu_button menu_button_icon margin0" id="btn-alt-manage" title="管理列表"><i class="fa-solid fa-trash-can"></i></div>
+                    <div class="menu_button menu_button_icon margin0" id="btn-alt-confirm-select" title="确认选择" style="color:#4CAF50;"><i class="fa-solid fa-check"></i> 确认选择</div>
                     <div class="menu_button menu_button_icon margin0" id="btn-alt-delete-confirm" title="确认删除" style="display:none;"><i class="fa-solid fa-check"></i> 确认删除 (0)</div>
                 </div>
             </div>
@@ -202,11 +203,14 @@ async function openAltAvatarPanel() {
 
         const btnUpload = document.getElementById('btn-alt-upload');
         const btnManage = document.getElementById('btn-alt-manage');
+        const btnConfirmSelect = document.getElementById('btn-alt-confirm-select');
         const btnDeleteConfirm = document.getElementById('btn-alt-delete-confirm');
         const inputUpload = document.getElementById('input-alt-upload');
         
         let isDeleteMode = false;
         let itemsToDelete = new Set();
+        // 核心修复：引入临时选中状态，点击只改状态不改 CSS
+        let tempSelected = data.selected; 
         
         function updateDeleteConfirmBtn() {
             btnDeleteConfirm.innerHTML = `<i class="fa-solid fa-check"></i> 确认删除 (${itemsToDelete.size})`;
@@ -221,14 +225,16 @@ async function openAltAvatarPanel() {
             grid.innerHTML = '';
             
             const origDiv = document.createElement('div');
-            origDiv.className = 'alt-avatar-item original-item' + (data.selected === null ? ' selected' : '');
+            // 高亮判定改为 tempSelected
+            origDiv.className = 'alt-avatar-item original-item' + (tempSelected === null ? ' selected' : '');
             origDiv.innerHTML = `<img src="${originalSrc}" title="原始卡面" onerror="this.src='img/ai4.png'">`;
             origDiv.onclick = () => selectAvatar(null);
             grid.appendChild(origDiv);
             
             data.images.forEach((b64, index) => {
                 const itemDiv = document.createElement('div');
-                itemDiv.className = 'alt-avatar-item' + (data.selected === index ? ' selected' : '');
+                // 高亮判定改为 tempSelected
+                itemDiv.className = 'alt-avatar-item' + (tempSelected === index ? ' selected' : '');
                 if (itemsToDelete.has(index)) itemDiv.classList.add('to-delete');
                 
                 itemDiv.innerHTML = `<img src="${b64}">`;
@@ -246,22 +252,33 @@ async function openAltAvatarPanel() {
         
         function selectAvatar(index) {
             if (isDeleteMode) return;
-            
-            // 修复：如果用户点击的是当前已经选中的图片，直接阻断，防止重复清理缓存
-            if (data.selected === index) return;
-            
-            data.selected = index;
-            
-            const theme = getCurrentTheme();
-            if (extension_settings.avatarCroppedImages && extension_settings.avatarCroppedImages[theme]) {
-                delete extension_settings.avatarCroppedImages[theme][avatarId];
-            }
-            
-            saveSettingsDebounced();
-            applyAltAvatars();
-            applyCroppedAvatars(); 
+            // 仅仅更新临时状态和重新渲染绿框，不执行任何替换逻辑
+            tempSelected = index;
             renderGrid();
         }
+
+        // 确认选择按钮逻辑
+        btnConfirmSelect.onclick = () => {
+            // 如果确认的图片就是原本生效的图片，直接关闭，完美保留剪裁缓存！
+            if (data.selected !== tempSelected) {
+                data.selected = tempSelected;
+                
+                // 只有真换了图片，才去清除当前角色的剪裁缓存
+                const theme = getCurrentTheme();
+                if (extension_settings.avatarCroppedImages && extension_settings.avatarCroppedImages[theme]) {
+                    delete extension_settings.avatarCroppedImages[theme][avatarId];
+                }
+                
+                saveSettingsDebounced();
+                applyAltAvatars();
+                applyCroppedAvatars(); 
+            }
+            
+            // 关闭弹窗
+            const closeBtn = document.querySelector('.popup-button-close');
+            if (closeBtn) closeBtn.click();
+            toastr.success('卡面已应用');
+        };
         
         function toggleDeleteMark(index, element) {
             if (itemsToDelete.has(index)) {
@@ -280,6 +297,7 @@ async function openAltAvatarPanel() {
                 btnManage.innerHTML = '<i class="fa-solid fa-xmark"></i>';
                 btnManage.title = '退出管理';
                 btnUpload.style.display = 'none';
+                btnConfirmSelect.style.display = 'none'; // 隐藏选择按钮
                 btnDeleteConfirm.style.display = 'flex';
                 itemsToDelete.clear();
                 updateDeleteConfirmBtn();
@@ -287,6 +305,7 @@ async function openAltAvatarPanel() {
                 btnManage.innerHTML = '<i class="fa-solid fa-trash-can"></i>';
                 btnManage.title = '管理列表';
                 btnUpload.style.display = 'flex';
+                btnConfirmSelect.style.display = 'flex'; // 恢复选择按钮
                 btnDeleteConfirm.style.display = 'none';
                 itemsToDelete.clear();
             }
@@ -303,11 +322,19 @@ async function openAltAvatarPanel() {
             const indexes = Array.from(itemsToDelete).sort((a, b) => b - a);
             
             indexes.forEach((index) => {
+                // 处理真实保存状态
                 if (data.selected === index) {
                     data.selected = null;
                 } else if (data.selected > index) {
                     data.selected -= 1;
                 }
+                // 处理临时状态
+                if (tempSelected === index) {
+                    tempSelected = null;
+                } else if (tempSelected > index) {
+                    tempSelected -= 1;
+                }
+
                 data.images.splice(index, 1);
             });
 
@@ -380,6 +407,7 @@ async function triggerNativeCropPopup(imgSrc) {
 }
 
 function injectCropButton(zoomedDiv) {
+    // 移除了开关控制，剪裁按钮全局常驻
     if (zoomedDiv.querySelector('#st-native-crop-btn')) return;
 
     const controlBar = zoomedDiv.querySelector('.panelControlBar');
@@ -423,6 +451,7 @@ setInterval(() => {
             
             const isEnabled = !!extension_settings.avatarClickZoomEnabled;
             
+            // 选项名称修改，选项文本改为“默认”
             container.innerHTML = `
                 <span data-i18n="Avatar Click Zoom">头像点击放大：</span>
                 <select id="st-avatar-crop-select" class="widthNatural flex1 margin0 text_pole" title="开启后允许点击聊天界面的头像进行放大">
