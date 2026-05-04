@@ -3,7 +3,6 @@ import { saveSettingsDebounced } from '../../../../script.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 // 初始化数据结构
-// 选项变量名变更为 avatarClickZoomEnabled，以更符合实际控制的功能
 if (extension_settings.avatarClickZoomEnabled === undefined) extension_settings.avatarClickZoomEnabled = false;
 if (!extension_settings.avatarCroppedImages) extension_settings.avatarCroppedImages = {};
 if (!extension_settings.altAvatars) extension_settings.altAvatars = {};
@@ -28,6 +27,18 @@ function getCurrentTheme() {
     const themeSelect = document.getElementById('themes');
     return themeSelect ? themeSelect.value : 'default';
 }
+
+// 记录当前真正有效的文件名（过滤掉临时 blob 路径）
+let lastValidAvatarId = null;
+setInterval(() => {
+    const previewImg = document.getElementById('avatar_load_preview');
+    if (previewImg) {
+        const src = previewImg.getAttribute('src');
+        if (src && !src.startsWith('blob:') && !src.startsWith('data:')) {
+            lastValidAvatarId = getAvatarIdFromSrc(src);
+        }
+    }
+}, 500);
 
 async function resizeImageToBase64(file) {
     return new Promise((resolve) => {
@@ -109,7 +120,6 @@ function applyCroppedAvatars() {
     const croppedData = extension_settings.avatarCroppedImages[theme] || {};
     let cssString = '';
     
-    // 全局开启，不再受开关限制
     for (const [avatarId, base64Image] of Object.entries(croppedData)) {
         if (avatarId === 'thumbnail') continue;
 
@@ -133,7 +143,6 @@ function applyCroppedAvatars() {
     styleTag.textContent = cssString;
 }
 
-// 单纯控制聊天界面的头像点击放大 CSS 穿透
 function updateClickZoomState() {
     const isEnabled = !!extension_settings.avatarClickZoomEnabled;
 
@@ -144,7 +153,6 @@ function updateClickZoomState() {
             pointerStyle.id = 'st-avatar-crop-pointer-events';
             document.head.appendChild(pointerStyle);
         }
-        // 最高优先级的点击穿透
         pointerStyle.textContent = `
             #chat .mes .mesAvatarWrapper .avatar, 
             #chat .mes .mesAvatarWrapper .avatar img {
@@ -156,7 +164,7 @@ function updateClickZoomState() {
     }
 }
 
-// ======================== 替换卡面面板 (多选上传、多选删除) ========================
+// ======================== 替换卡面面板 ========================
 
 async function openAltAvatarPanel() {
     const previewImg = document.getElementById('avatar_load_preview');
@@ -168,8 +176,8 @@ async function openAltAvatarPanel() {
     const originalSrc = previewImg.getAttribute('src');
     const avatarId = getAvatarIdFromSrc(originalSrc);
     
-    if (avatarId === 'thumbnail') {
-        toastr.error('获取头像文件名失败，无法开启替换功能');
+    if (avatarId === 'thumbnail' || originalSrc.startsWith('blob:')) {
+        toastr.error('获取头像文件名失败或图片仍在加载，请稍后再试');
         return;
     }
     
@@ -185,26 +193,22 @@ async function openAltAvatarPanel() {
                 <div style="display:flex; gap:10px; align-items:center;">
                     <div class="menu_button menu_button_icon margin0" id="btn-alt-upload" title="上传图片"><i class="fa-solid fa-upload"></i></div>
                     <div class="menu_button menu_button_icon margin0" id="btn-alt-manage" title="管理列表"><i class="fa-solid fa-trash-can"></i></div>
-                    <div class="menu_button menu_button_icon margin0" id="btn-alt-delete-confirm" title="确认删除" style="display:none; color:#ff4444;"><i class="fa-solid fa-trash-can"></i> (0)</div>
+                    <!-- 去除了文字，保留和X号一样的正方形尺寸 -->
+                    <div class="menu_button menu_button_icon margin0" id="btn-alt-delete-confirm" title="确认删除 (0)" style="display:none; color:#ff4444;"><i class="fa-solid fa-trash-can"></i></div>
                 </div>
             </div>
-            <!-- 支持多选的 input -->
             <input type="file" id="input-alt-upload" style="display:none;" accept="image/*" multiple>
             <div class="alt-avatar-grid" id="grid-alt-avatars"></div>
         </div>
     `;
     
-    // 引入临时选中状态，点击只改状态不改 CSS
     let tempSelected = data.selected; 
 
-    // 使用 CONFIRM 类型的弹窗（自带底部的 确认/取消 按钮）
     callGenericPopup(html, POPUP_TYPE.CONFIRM, '', { wide: true, large: true }).then((confirm) => {
         if (confirm) {
-            // 如果点击了底部的确认按钮，且状态有变，则应用设置
             if (data.selected !== tempSelected) {
                 data.selected = tempSelected;
                 
-                // 只有真换了图片，才去清除当前角色的剪裁缓存
                 const theme = getCurrentTheme();
                 if (extension_settings.avatarCroppedImages && extension_settings.avatarCroppedImages[theme]) {
                     delete extension_settings.avatarCroppedImages[theme][avatarId];
@@ -231,15 +235,14 @@ async function openAltAvatarPanel() {
         let itemsToDelete = new Set();
         
         function updateDeleteConfirmBtn() {
-            btnDeleteConfirm.innerHTML = `<i class="fa-solid fa-trash-can"></i> (${itemsToDelete.size})`;
-            btnDeleteConfirm.style.color = '#ff4444';
+            // 文字只写在 title 悬浮提示里，不破坏按钮大小
+            btnDeleteConfirm.title = `确认删除 (${itemsToDelete.size})`;
         }
 
         function renderGrid() {
             grid.innerHTML = '';
             
             const origDiv = document.createElement('div');
-            // 高亮判定改为 tempSelected
             origDiv.className = 'alt-avatar-item original-item' + (tempSelected === null ? ' selected' : '');
             origDiv.innerHTML = `<img src="${originalSrc}" title="原始卡面" onerror="this.src='img/ai4.png'">`;
             origDiv.onclick = () => selectAvatar(null);
@@ -247,7 +250,6 @@ async function openAltAvatarPanel() {
             
             data.images.forEach((b64, index) => {
                 const itemDiv = document.createElement('div');
-                // 高亮判定改为 tempSelected
                 itemDiv.className = 'alt-avatar-item' + (tempSelected === index ? ' selected' : '');
                 if (itemsToDelete.has(index)) itemDiv.classList.add('to-delete');
                 
@@ -266,7 +268,6 @@ async function openAltAvatarPanel() {
         
         function selectAvatar(index) {
             if (isDeleteMode) return;
-            // 仅仅更新临时状态和重新渲染绿框，不执行任何替换逻辑
             tempSelected = index;
             renderGrid();
         }
@@ -311,19 +312,16 @@ async function openAltAvatarPanel() {
             const indexes = Array.from(itemsToDelete).sort((a, b) => b - a);
             
             indexes.forEach((index) => {
-                // 处理真实保存状态
                 if (data.selected === index) {
                     data.selected = null;
                 } else if (data.selected > index) {
                     data.selected -= 1;
                 }
-                // 处理临时状态
                 if (tempSelected === index) {
                     tempSelected = null;
                 } else if (tempSelected > index) {
                     tempSelected -= 1;
                 }
-
                 data.images.splice(index, 1);
             });
 
@@ -396,7 +394,6 @@ async function triggerNativeCropPopup(imgSrc) {
 }
 
 function injectCropButton(zoomedDiv) {
-    // 移除了开关控制，剪裁按钮全局常驻
     if (zoomedDiv.querySelector('#st-native-crop-btn')) return;
 
     const controlBar = zoomedDiv.querySelector('.panelControlBar');
@@ -440,7 +437,6 @@ setInterval(() => {
             
             const isEnabled = !!extension_settings.avatarClickZoomEnabled;
             
-            // 默认选项排在第一位
             container.innerHTML = `
                 <span data-i18n="Avatar Click Zoom">头像点击放大：</span>
                 <select id="st-avatar-crop-select" class="widthNatural flex1 margin0 text_pole" title="开启后允许点击聊天界面的头像进行放大">
@@ -478,54 +474,69 @@ jQuery(async () => {
     applyCroppedAvatars();
     updateClickZoomState();
     
-    // 监听原生上传/替换头像动作，自动清除对应角色的跨主题剪裁缓存和替换卡面缓存
+    // 监听原生上传动作：精准清理旧缓存 & 自动迁移数据
     document.body.addEventListener('change', (e) => {
         if (e.target && e.target.tagName === 'INPUT' && e.target.type === 'file') {
             const id = e.target.id;
-            let avatarId = null;
 
-            // 角色替换或原生图片覆盖
-            if (id === 'add_avatar_button' || id === 'character_replace_file') {
-                const previewImg = document.getElementById('avatar_load_preview');
-                if (previewImg && previewImg.getAttribute('src')) {
-                    avatarId = getAvatarIdFromSrc(previewImg.getAttribute('src'));
-                }
-            } 
-            // User Persona 原生上传
-            else if (id === 'avatar_upload_file') {
-                const overwriteInput = document.getElementById('avatar_upload_overwrite');
-                if (overwriteInput && overwriteInput.value) {
-                    avatarId = overwriteInput.value;
-                }
-            }
-            // 群组头像上传
-            else if (id === 'group_avatar_button') {
-                const previewImg = document.querySelector('#group_avatar_preview .avatar img');
-                if (previewImg && previewImg.getAttribute('src')) {
-                    avatarId = getAvatarIdFromSrc(previewImg.getAttribute('src'));
-                }
-            }
-
-            if (avatarId && avatarId !== 'thumbnail') {
-                // 遍历清理跨主题剪裁缓存
-                if (extension_settings.avatarCroppedImages) {
-                    for (const t of Object.keys(extension_settings.avatarCroppedImages)) {
-                        if (extension_settings.avatarCroppedImages[t]) {
-                            delete extension_settings.avatarCroppedImages[t][avatarId];
-                        }
+            if (['add_avatar_button', 'character_replace_file', 'avatar_upload_file', 'group_avatar_button'].includes(id)) {
+                
+                // 在文件真正被酒馆处理成 blob 之前，立刻同步获取旧的有效文件名
+                let oldAvatarId = null;
+                const previewImg = document.getElementById('avatar_load_preview') || document.querySelector('#group_avatar_preview .avatar img');
+                
+                if (previewImg) {
+                    const src = previewImg.getAttribute('src');
+                    if (src && !src.startsWith('blob:') && !src.startsWith('data:')) {
+                        oldAvatarId = getAvatarIdFromSrc(src);
+                    } else {
+                        oldAvatarId = lastValidAvatarId;
                     }
                 }
-                // 清理“替换卡面”选择标记，让新图显示出来
-                if (extension_settings.altAvatars && extension_settings.altAvatars[avatarId]) {
-                    extension_settings.altAvatars[avatarId].selected = null;
-                }
-                saveSettingsDebounced();
-                
-                // 稍微延迟应用，让酒馆原生的新图先渲染上 DOM
-                setTimeout(() => {
+
+                if (oldAvatarId && oldAvatarId !== 'thumbnail') {
+                    // 1. 全局清理该旧文件对应的所有主题的剪裁缓存（修复切回主题出现旧图的Bug）
+                    if (extension_settings.avatarCroppedImages) {
+                        for (const t of Object.keys(extension_settings.avatarCroppedImages)) {
+                            if (extension_settings.avatarCroppedImages[t]) {
+                                delete extension_settings.avatarCroppedImages[t][oldAvatarId];
+                            }
+                        }
+                    }
+                    
+                    // 2. 将此旧文件上的卡面替换状态取消（确保原生新图不被 CSS 覆盖）
+                    if (extension_settings.altAvatars && extension_settings.altAvatars[oldAvatarId]) {
+                        extension_settings.altAvatars[oldAvatarId].selected = null;
+                    }
+                    
+                    saveSettingsDebounced();
                     applyAltAvatars();
                     applyCroppedAvatars();
-                }, 200);
+
+                    // 3. 轮询监控：当酒馆处理完新图并生成真实的新路径后，迁移备用卡面数据
+                    let checkCount = 0;
+                    const migrateInterval = setInterval(() => {
+                        checkCount++;
+                        if (previewImg) {
+                            const currentSrc = previewImg.getAttribute('src');
+                            if (currentSrc && !currentSrc.startsWith('blob:') && !currentSrc.startsWith('data:')) {
+                                const newAvatarId = getAvatarIdFromSrc(currentSrc);
+                                
+                                // 文件名发生了实际变动，执行原卡面数据迁移（修复“替换头像会导致备用卡面被删”的Bug）
+                                if (newAvatarId !== oldAvatarId && newAvatarId !== 'thumbnail') {
+                                    if (extension_settings.altAvatars[oldAvatarId] && extension_settings.altAvatars[oldAvatarId].images.length > 0) {
+                                        extension_settings.altAvatars[newAvatarId] = JSON.parse(JSON.stringify(extension_settings.altAvatars[oldAvatarId]));
+                                        delete extension_settings.altAvatars[oldAvatarId];
+                                        saveSettingsDebounced();
+                                    }
+                                }
+                                clearInterval(migrateInterval);
+                            }
+                        }
+                        // 最多轮询 10 秒
+                        if (checkCount > 20) clearInterval(migrateInterval);
+                    }, 500);
+                }
             }
         }
     });
