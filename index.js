@@ -7,13 +7,22 @@ if (extension_settings.avatarCropEnabled === undefined) extension_settings.avata
 if (!extension_settings.avatarCroppedImages) extension_settings.avatarCroppedImages = {};
 if (!extension_settings.altAvatars) extension_settings.altAvatars = {};
 
+// ======================== 核心修复：精准 ID 提取 ========================
 function getAvatarIdFromSrc(src) {
+    if (!src) return null;
     try {
+        // 过滤掉 base64、blob 以及酒馆的默认占位图
+        if (src.startsWith('data:') || src.startsWith('blob:')) return null;
         let cleanSrc = src.split('?')[0];
         const parts = cleanSrc.split('/');
-        return decodeURIComponent(parts[parts.length - 1]);
+        const filename = decodeURIComponent(parts[parts.length - 1]);
+        
+        if (!filename || filename.trim() === '' || filename === 'ai4.png' || filename === 'ai4_user.png') {
+            return null;
+        }
+        return filename;
     } catch (e) {
-        return src;
+        return null;
     }
 }
 
@@ -22,7 +31,6 @@ function getCurrentTheme() {
     return themeSelect ? themeSelect.value : 'default';
 }
 
-// 智能图像压缩：防止挤爆缓存，最大限制为 800x800 的 JPG
 async function resizeImageToBase64(file) {
     return new Promise((resolve) => {
         const reader = new FileReader();
@@ -63,29 +71,42 @@ async function getBase64FromUrl(url) {
     });
 }
 
-// ======================== CSS 生成引擎 ========================
+// ======================== CSS 生成引擎 (修复防误杀) ========================
 
-// 渲染替换卡面 CSS (去除了 #chat 限制，全局生效)
+// 辅助生成极其严格的 CSS 选择器，避免 a.png 匹配到 boba.png，避免空匹配
+function generateStrictSelectors(id) {
+    return `
+        .avatar img[src$="/${id}"],
+        .avatar img[src*="/${id}?"],
+        .avatar img[src^="${id}"],
+        
+        #avatar_load_preview[src$="/${id}"],
+        #avatar_load_preview[src*="/${id}?"],
+        #avatar_load_preview[src^="${id}"],
+        
+        .zoomed_avatar img[src$="/${id}"],
+        .zoomed_avatar img[src*="/${id}?"],
+        .zoomed_avatar img[src^="${id}"]
+    `;
+}
+
 function applyAltAvatars() {
     let cssString = '';
     for (const [avatarId, data] of Object.entries(extension_settings.altAvatars)) {
-        if (data.selected !== null && data.images[data.selected]) {
-            const escapedId = avatarId.replace(/"/g, '\\"');
-            const encodedId = encodeURIComponent(avatarId).replace(/"/g, '\\"');
-            const b64 = data.images[data.selected];
+        // 数据安检：跳过非法数据
+        if (!avatarId || avatarId === 'null' || data.selected === null || !data.images[data.selected]) continue;
 
-            cssString += `
-                .avatar img[src*="${escapedId}"],
-                .avatar img[src*="${encodedId}"],
-                #avatar_load_preview[src*="${escapedId}"],
-                #avatar_load_preview[src*="${encodedId}"],
-                .zoomed_avatar img[src*="${escapedId}"],
-                .zoomed_avatar img[src*="${encodedId}"] {
-                    content: url("${b64}") !important;
-                    object-fit: cover !important;
-                }
-            `;
-        }
+        const escapedId = avatarId.replace(/"/g, '\\"');
+        const encodedId = encodeURIComponent(avatarId).replace(/"/g, '\\"');
+        const b64 = data.images[data.selected];
+
+        cssString += `
+            ${generateStrictSelectors(escapedId)},
+            ${generateStrictSelectors(encodedId)} {
+                content: url("${b64}") !important;
+                object-fit: cover !important;
+            }
+        `;
     }
 
     let styleTag = document.getElementById('custom-alt-avatar-style');
@@ -97,20 +118,23 @@ function applyAltAvatars() {
     styleTag.textContent = cssString;
 }
 
-// 渲染剪裁头像 CSS
 function applyCroppedAvatars() {
     const theme = getCurrentTheme();
     const croppedData = extension_settings.avatarCroppedImages[theme] || {};
     let cssString = '';
     
-    // 如果功能未开启，强制置空 CSS，不加载任何剪裁数据
     if (extension_settings.avatarCropEnabled) {
         for (const [avatarId, base64Image] of Object.entries(croppedData)) {
+            // 数据安检
+            if (!avatarId || avatarId === 'null' || !base64Image) continue;
+
             const escapedId = avatarId.replace(/"/g, '\\"');
             const encodedId = encodeURIComponent(avatarId).replace(/"/g, '\\"');
+            
+            // 剪裁优先级略高，所以生成相同的安全选择器
             cssString += `
-                .avatar img[src*="${escapedId}"],
-                .avatar img[src*="${encodedId}"] {
+                ${generateStrictSelectors(escapedId)},
+                ${generateStrictSelectors(encodedId)} {
                     content: url("${base64Image}") !important;
                     object-fit: cover !important;
                 }
@@ -127,17 +151,14 @@ function applyCroppedAvatars() {
     styleTag.textContent = cssString;
 }
 
-// 刷新剪裁特性的核心开关状态
 function updateAvatarFeaturesState() {
     const isEnabled = !!extension_settings.avatarCropEnabled;
 
-    // 强制最高优先级的点击穿透 CSS
     let pointerStyle = document.getElementById('st-avatar-crop-pointer-events');
     if (isEnabled) {
         if (!pointerStyle) {
             pointerStyle = document.createElement('style');
             pointerStyle.id = 'st-avatar-crop-pointer-events';
-            // 将节点追加到 head 最后，确保最高优先级
             document.head.appendChild(pointerStyle);
         }
         pointerStyle.textContent = `
@@ -150,7 +171,16 @@ function updateAvatarFeaturesState() {
         pointerStyle.remove();
     }
 
-    applyCroppedAvatars();
+    const altBtn = document.getElementById('st-alt-avatar-btn');
+    if (altBtn) altBtn.style.display = isEnabled ? 'flex' : 'none';
+
+    if (isEnabled) {
+        applyAltAvatars();
+        applyCroppedAvatars();
+    } else {
+        if (document.getElementById('custom-avatar-crop-style')) document.getElementById('custom-avatar-crop-style').textContent = '';
+        if (document.getElementById('custom-alt-avatar-style')) document.getElementById('custom-alt-avatar-style').textContent = '';
+    }
 }
 
 // ======================== 替换卡面面板 ========================
@@ -162,16 +192,19 @@ async function openAltAvatarPanel() {
         return;
     }
     
-    // 使用 getAttribute 获取安全的相对路径，防止本地图片跨域导致的破图
     const originalSrc = previewImg.getAttribute('src');
     const avatarId = getAvatarIdFromSrc(originalSrc);
+    
+    if (!avatarId) {
+        toastr.warning('无法识别当前角色的独立头像ID，请尝试重新选择角色。');
+        return;
+    }
     
     if (!extension_settings.altAvatars[avatarId]) {
         extension_settings.altAvatars[avatarId] = { selected: null, images: [] };
     }
     const data = extension_settings.altAvatars[avatarId];
     
-    // 标题在左，按钮在右，且无需文字描述
     const html = `
         <div id="st-alt-avatar-panel">
             <div style="display:flex; justify-content:space-between; align-items:center; border-bottom: 1px solid var(--SmartThemeBorderColor, #555); padding-bottom: 10px;">
@@ -271,6 +304,11 @@ async function openAltAvatarPanel() {
 
 async function triggerNativeCropPopup(imgSrc) {
     const avatarId = getAvatarIdFromSrc(imgSrc);
+    if (!avatarId) {
+        toastr.error('无法读取图片 ID，请重新选择角色');
+        return;
+    }
+
     let base64Original;
 
     if (extension_settings.altAvatars[avatarId] && extension_settings.altAvatars[avatarId].selected !== null) {
@@ -321,7 +359,8 @@ function injectCropButton(zoomedDiv) {
         const img = zoomedDiv.querySelector('img');
         if (img) {
             zoomedDiv.click(); 
-            await triggerNativeCropPopup(img.src);
+            // 确保使用真正的属性 src
+            await triggerNativeCropPopup(img.getAttribute('src') || img.src);
         }
     });
 
@@ -341,9 +380,7 @@ setInterval(() => {
         applyCroppedAvatars(); 
     }
 
-    // 注入“头像剪裁”下拉框设置 (放置于 AvatarAndChatDisplay)
     try {
-        // 定位到你提供的 HTML 结构中精确的位置
         const targetContainer = document.querySelector("#UI-Theme-Block > div.flex-container.flexFlowColumn.flexNoGap > div.flex-container.flexFlowColumn");
         
         if (targetContainer && !document.getElementById('st-avatar-features-toggle-container')) {
@@ -353,7 +390,6 @@ setInterval(() => {
             
             const isEnabled = !!extension_settings.avatarCropEnabled;
             
-            // 采用下拉框结构
             container.innerHTML = `
                 <span data-i18n="Avatar Crop">头像剪裁:</span>
                 <select id="st-avatar-crop-select" class="widthNatural flex1 margin0 text_pole" title="开启后允许点击放大后的头像进行高级剪裁">
@@ -369,11 +405,9 @@ setInterval(() => {
                 updateAvatarFeaturesState();
             });
         }
-    } catch (e) { /* 防御性包裹 */ }
+    } catch (e) {}
 
-    // 注入“替换卡面”按钮 (始终显示，不受剪裁开关影响)
     try {
-        // 寻找 avatar_controls 中的底栏
         const avatarControls = document.querySelector('#avatar_controls > .form_create_bottom_buttons_block');
         if (avatarControls && !document.getElementById('st-alt-avatar-btn')) {
             const btn = document.createElement('div');
@@ -384,16 +418,15 @@ setInterval(() => {
             btn.addEventListener('click', openAltAvatarPanel);
             
             avatarControls.prepend(btn);
+            altBtn.style.display = extension_settings.avatarCropEnabled ? 'flex' : 'none';
         }
     } catch (e) {}
 }, 1000);
 
 jQuery(async () => {
-    // 初始化应用常驻效果
     applyAltAvatars();
     updateAvatarFeaturesState();
-    
-    console.log('[AvatarCropper] Successfully Loaded with Safety Checks.');
+    console.log('[AvatarCropper] Successfully Loaded with Safety Checks & Strict Targeting.');
 
     const observer = new MutationObserver((mutations) => {
         mutations.forEach((mutation) => {
