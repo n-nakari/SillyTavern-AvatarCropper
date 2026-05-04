@@ -12,11 +12,15 @@
 .zoomed_avatar .panelControlBar .dragClose.fa-solid,
 #st-native-crop-btn .fa-solid {
     font-size: calc(var(--mainFontSize)*1.3) !important;
+    color: white !important;
 }
 
 body .panelControlBar {
     align-items: center;
     opacity: 1 !important;
+    background: black !important;
+    border-radius: 8px;
+    padding: 2px 5px;
 }
 
 .dragClose {
