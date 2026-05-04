@@ -156,50 +156,12 @@ function updateClickZoomState() {
     }
 }
 
-// 监听原生上传，清除对应的剪裁缓存，防止旧剪裁覆盖新原图
-function clearCropCache(avatarId) {
-    if (!avatarId || avatarId === 'thumbnail') return;
-    let cleared = false;
-    if (extension_settings.avatarCroppedImages) {
-        for (const t of Object.keys(extension_settings.avatarCroppedImages)) {
-            if (extension_settings.avatarCroppedImages[t] && extension_settings.avatarCroppedImages[t][avatarId]) {
-                delete extension_settings.avatarCroppedImages[t][avatarId];
-                cleared = true;
-            }
-        }
-    }
-    if (cleared) {
-        saveSettingsDebounced();
-        applyCroppedAvatars();
-    }
-}
-
-document.addEventListener('change', (e) => {
-    // 监听 User Persona 的原生上传
-    if (e.target && e.target.id === 'avatar_upload_file') {
-        const previewImg = document.querySelector('#user_avatar_block .avatar-container.selected img') || document.querySelector('#user_avatar_block .avatar img');
-        if (previewImg) clearCropCache(getAvatarIdFromSrc(previewImg.getAttribute('src')));
-    }
-    // 监听 Character 角色的原生上传
-    if (e.target && e.target.id === 'add_avatar_button') {
-        const previewImg = document.getElementById('avatar_load_preview');
-        if (previewImg) clearCropCache(getAvatarIdFromSrc(previewImg.getAttribute('src')));
-    }
-});
-
 // ======================== 替换卡面面板 (多选上传、多选删除) ========================
 
-// 增加 isPersona 参数，以区分打开的是角色还是User
-async function openAltAvatarPanel(isPersona = false) {
-    let previewImg;
-    if (isPersona === true) {
-        previewImg = document.querySelector('#user_avatar_block .avatar-container.selected img') || document.querySelector('#user_avatar_block .avatar img');
-    } else {
-        previewImg = document.getElementById('avatar_load_preview');
-    }
-
+async function openAltAvatarPanel() {
+    const previewImg = document.getElementById('avatar_load_preview');
     if (!previewImg || !previewImg.getAttribute('src')) {
-        toastr.warning('请先选择一个角色或用户');
+        toastr.warning('请先选择一个角色');
         return;
     }
     
@@ -285,7 +247,7 @@ async function openAltAvatarPanel(isPersona = false) {
         function selectAvatar(index) {
             if (isDeleteMode) return;
             
-            // 修复：点选当前正在使用的卡面时，直接返回，不进行重置和清理操作！
+            // 修复：如果用户点击的是当前已经选中的图片，直接阻断，防止重复清理缓存
             if (data.selected === index) return;
             
             data.selected = index;
@@ -418,7 +380,6 @@ async function triggerNativeCropPopup(imgSrc) {
 }
 
 function injectCropButton(zoomedDiv) {
-    // 移除了开关控制，剪裁按钮全局常驻
     if (zoomedDiv.querySelector('#st-native-crop-btn')) return;
 
     const controlBar = zoomedDiv.querySelector('.panelControlBar');
@@ -446,7 +407,6 @@ function injectCropButton(zoomedDiv) {
 let lastTheme = getCurrentTheme();
 
 setInterval(() => {
-    // 监听美化主题改变，重刷剪裁图片（全局常驻）
     const currentTheme = getCurrentTheme();
     if (currentTheme !== lastTheme) {
         lastTheme = currentTheme;
@@ -463,7 +423,6 @@ setInterval(() => {
             
             const isEnabled = !!extension_settings.avatarClickZoomEnabled;
             
-            // 选项名称修改，选项文本改为“默认”
             container.innerHTML = `
                 <span data-i18n="Avatar Click Zoom">头像点击放大：</span>
                 <select id="st-avatar-crop-select" class="widthNatural flex1 margin0 text_pole" title="开启后允许点击聊天界面的头像进行放大">
@@ -481,7 +440,6 @@ setInterval(() => {
         }
     } catch (e) { }
 
-    // 注入角色面板的“替换卡面”
     try {
         const avatarControls = document.querySelector('#avatar_controls > .form_create_bottom_buttons_block');
         if (avatarControls && !document.getElementById('st-alt-avatar-btn')) {
@@ -490,34 +448,70 @@ setInterval(() => {
             btn.className = 'menu_button menu_button_icon';
             btn.innerHTML = '<i class="fa-solid fa-images"></i>';
             btn.title = '替换卡面';
-            btn.addEventListener('click', () => openAltAvatarPanel(false));
+            btn.addEventListener('click', openAltAvatarPanel);
             
             avatarControls.prepend(btn);
-        }
-    } catch (e) {}
-
-    // 注入 User Persona 面板的“替换卡面”
-    try {
-        const personaControls = document.querySelector('#persona_controls > .persona_controls_buttons_block');
-        if (personaControls && !document.getElementById('st-alt-avatar-btn-persona')) {
-            const btn = document.createElement('div');
-            btn.id = 'st-alt-avatar-btn-persona';
-            btn.className = 'menu_button menu_button_icon';
-            btn.innerHTML = '<i class="fa-solid fa-images"></i>';
-            btn.title = '替换卡面';
-            btn.addEventListener('click', () => openAltAvatarPanel(true));
-            
-            personaControls.prepend(btn);
         }
     } catch (e) {}
 }, 1000);
 
 jQuery(async () => {
-    // 启动时初始化
-    applyAltAvatars();      
-    applyCroppedAvatars();  
-    updateClickZoomState(); 
+    applyAltAvatars();
+    applyCroppedAvatars();
+    updateClickZoomState();
     
+    // 监听原生上传/替换头像动作，自动清除对应角色的跨主题剪裁缓存和替换卡面缓存
+    document.body.addEventListener('change', (e) => {
+        if (e.target && e.target.tagName === 'INPUT' && e.target.type === 'file') {
+            const id = e.target.id;
+            let avatarId = null;
+
+            // 角色替换或原生图片覆盖
+            if (id === 'add_avatar_button' || id === 'character_replace_file') {
+                const previewImg = document.getElementById('avatar_load_preview');
+                if (previewImg && previewImg.getAttribute('src')) {
+                    avatarId = getAvatarIdFromSrc(previewImg.getAttribute('src'));
+                }
+            } 
+            // User Persona 原生上传
+            else if (id === 'avatar_upload_file') {
+                const overwriteInput = document.getElementById('avatar_upload_overwrite');
+                if (overwriteInput && overwriteInput.value) {
+                    avatarId = overwriteInput.value;
+                }
+            }
+            // 群组头像上传
+            else if (id === 'group_avatar_button') {
+                const previewImg = document.querySelector('#group_avatar_preview .avatar img');
+                if (previewImg && previewImg.getAttribute('src')) {
+                    avatarId = getAvatarIdFromSrc(previewImg.getAttribute('src'));
+                }
+            }
+
+            if (avatarId && avatarId !== 'thumbnail') {
+                // 遍历清理跨主题剪裁缓存
+                if (extension_settings.avatarCroppedImages) {
+                    for (const t of Object.keys(extension_settings.avatarCroppedImages)) {
+                        if (extension_settings.avatarCroppedImages[t]) {
+                            delete extension_settings.avatarCroppedImages[t][avatarId];
+                        }
+                    }
+                }
+                // 清理“替换卡面”选择标记，让新图显示出来
+                if (extension_settings.altAvatars && extension_settings.altAvatars[avatarId]) {
+                    extension_settings.altAvatars[avatarId].selected = null;
+                }
+                saveSettingsDebounced();
+                
+                // 稍微延迟应用，让酒馆原生的新图先渲染上 DOM
+                setTimeout(() => {
+                    applyAltAvatars();
+                    applyCroppedAvatars();
+                }, 200);
+            }
+        }
+    });
+
     console.log('[AvatarCropper] Successfully Loaded.');
 
     const observer = new MutationObserver((mutations) => {
