@@ -2,28 +2,21 @@ import { extension_settings } from '../../../extensions.js';
 import { saveSettingsDebounced } from '../../../../script.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
+// 初始化数据结构
 if (extension_settings.avatarCropEnabled === undefined) extension_settings.avatarCropEnabled = false;
 if (!extension_settings.avatarCroppedImages) extension_settings.avatarCroppedImages = {};
 if (!extension_settings.altAvatars) extension_settings.altAvatars = {};
 
-// [核心修复]：完美解析 SillyTavern 复杂的图片 URL 路径，精确提取真实的 Avatar 文件名
 function getAvatarIdFromSrc(src) {
     try {
-        // 将相对路径转化为绝对路径以供 URL 解析器读取
         const urlObj = new URL(src, window.location.origin);
-        
-        // 1. 检查是否存在如 ?file=Alice.png 或 ?avatar=User.png 这样的参数
         const fileParam = urlObj.searchParams.get('file') || urlObj.searchParams.get('avatar');
-        if (fileParam) {
-            return decodeURIComponent(fileParam);
-        }
+        if (fileParam) return decodeURIComponent(fileParam);
         
-        // 2. 如果没有参数，说明是常规路径如 /characters/Alice.png，获取最后一段
         const parts = urlObj.pathname.split('/');
         let filename = parts[parts.length - 1];
         return decodeURIComponent(filename);
     } catch (e) {
-        // 最基础的后备方案
         let cleanSrc = src.split('?')[0];
         const parts = cleanSrc.split('/');
         return decodeURIComponent(parts[parts.length - 1]);
@@ -75,11 +68,11 @@ async function getBase64FromUrl(url) {
     });
 }
 
-// 渲染替换卡面 CSS (精确瞄准，不再误伤)
+// ======================== CSS 生成引擎 ========================
+
 function applyAltAvatars() {
     let cssString = '';
     for (const [avatarId, data] of Object.entries(extension_settings.altAvatars)) {
-        // 如果之前因为 bug 存入了 'thumbnail' 这个脏数据，直接跳过不渲染
         if (avatarId === 'thumbnail') continue; 
 
         if (data.selected !== null && data.images[data.selected]) {
@@ -110,7 +103,6 @@ function applyAltAvatars() {
     styleTag.textContent = cssString;
 }
 
-// 渲染剪裁头像 CSS
 function applyCroppedAvatars() {
     const theme = getCurrentTheme();
     const croppedData = extension_settings.avatarCroppedImages[theme] || {};
@@ -118,7 +110,6 @@ function applyCroppedAvatars() {
     
     if (extension_settings.avatarCropEnabled) {
         for (const [avatarId, base64Image] of Object.entries(croppedData)) {
-            // 跳过脏数据
             if (avatarId === 'thumbnail') continue;
 
             const escapedId = avatarId.replace(/"/g, '\\"');
@@ -165,6 +156,8 @@ function updateAvatarFeaturesState() {
     applyCroppedAvatars();
 }
 
+// ======================== 替换卡面面板 (多选上传、多选删除) ========================
+
 async function openAltAvatarPanel() {
     const previewImg = document.getElementById('avatar_load_preview');
     if (!previewImg || !previewImg.getAttribute('src')) {
@@ -175,7 +168,6 @@ async function openAltAvatarPanel() {
     const originalSrc = previewImg.getAttribute('src');
     const avatarId = getAvatarIdFromSrc(originalSrc);
     
-    // 如果由于之前的Bug传入了无效数据，阻止打开以防崩溃
     if (avatarId === 'thumbnail') {
         toastr.error('获取头像文件名失败，无法开启替换功能。');
         return;
@@ -190,12 +182,14 @@ async function openAltAvatarPanel() {
         <div id="st-alt-avatar-panel">
             <div style="display:flex; justify-content:space-between; align-items:center; border-bottom: 1px solid var(--SmartThemeBorderColor, #555); padding-bottom: 10px;">
                 <h3 style="margin: 0;">替换卡面</h3>
-                <div style="display:flex; gap:10px;">
+                <div style="display:flex; gap:10px; align-items:center;">
                     <div class="menu_button menu_button_icon margin0" id="btn-alt-upload" title="上传图片"><i class="fa-solid fa-upload"></i></div>
                     <div class="menu_button menu_button_icon margin0" id="btn-alt-manage" title="管理列表"><i class="fa-solid fa-trash-can"></i></div>
+                    <div class="menu_button menu_button_icon margin0" id="btn-alt-delete-confirm" title="确认删除" style="display:none; color:#ff4444;"><i class="fa-solid fa-check"></i> 确认删除(0)</div>
                 </div>
             </div>
-            <input type="file" id="input-alt-upload" style="display:none;" accept="image/*">
+            <!-- 支持多选的 input -->
+            <input type="file" id="input-alt-upload" style="display:none;" accept="image/*" multiple>
             <div class="alt-avatar-grid" id="grid-alt-avatars"></div>
         </div>
     `;
@@ -208,9 +202,21 @@ async function openAltAvatarPanel() {
 
         const btnUpload = document.getElementById('btn-alt-upload');
         const btnManage = document.getElementById('btn-alt-manage');
+        const btnDeleteConfirm = document.getElementById('btn-alt-delete-confirm');
         const inputUpload = document.getElementById('input-alt-upload');
-        let isDeleteMode = false;
         
+        let isDeleteMode = false;
+        let itemsToDelete = new Set();
+        
+        function updateDeleteConfirmBtn() {
+            btnDeleteConfirm.innerHTML = `<i class="fa-solid fa-check"></i> 确认删除(${itemsToDelete.size})`;
+            if(itemsToDelete.size > 0) {
+                btnDeleteConfirm.style.color = '#ff4444';
+            } else {
+                btnDeleteConfirm.style.color = 'var(--SmartThemeTextColor, #fff)';
+            }
+        }
+
         function renderGrid() {
             grid.innerHTML = '';
             
@@ -223,10 +229,16 @@ async function openAltAvatarPanel() {
             data.images.forEach((b64, index) => {
                 const itemDiv = document.createElement('div');
                 itemDiv.className = 'alt-avatar-item' + (data.selected === index ? ' selected' : '');
-                itemDiv.innerHTML = `<img src="${b64}"><div class="delete-btn" title="删除图片"><i class="fa-solid fa-xmark"></i></div>`;
+                if (itemsToDelete.has(index)) itemDiv.classList.add('to-delete');
+                
+                itemDiv.innerHTML = `<img src="${b64}">`;
                 itemDiv.onclick = (e) => {
-                    if (isDeleteMode) { e.stopPropagation(); deleteAvatar(index); } 
-                    else { selectAvatar(index); }
+                    if (isDeleteMode) { 
+                        e.stopPropagation(); 
+                        toggleDeleteMark(index, itemDiv);
+                    } else { 
+                        selectAvatar(index); 
+                    }
                 };
                 grid.appendChild(itemDiv);
             });
@@ -247,39 +259,86 @@ async function openAltAvatarPanel() {
             renderGrid();
         }
         
-        function deleteAvatar(index) {
-            if (data.selected === index) {
-                data.selected = null;
-                applyAltAvatars();
-            } else if (data.selected > index) {
-                data.selected -= 1;
+        function toggleDeleteMark(index, element) {
+            if (itemsToDelete.has(index)) {
+                itemsToDelete.delete(index);
+                element.classList.remove('to-delete');
+            } else {
+                itemsToDelete.add(index);
+                element.classList.add('to-delete');
             }
-            data.images.splice(index, 1);
-            saveSettingsDebounced();
-            renderGrid();
+            updateDeleteConfirmBtn();
         }
         
         btnManage.onclick = () => {
             isDeleteMode = !isDeleteMode;
-            btnManage.style.color = isDeleteMode ? '#ff4444' : '';
+            if (isDeleteMode) {
+                btnManage.innerHTML = '<i class="fa-solid fa-xmark"></i>';
+                btnManage.title = '取消管理';
+                btnUpload.style.display = 'none';
+                btnDeleteConfirm.style.display = 'flex';
+                itemsToDelete.clear();
+                updateDeleteConfirmBtn();
+            } else {
+                btnManage.innerHTML = '<i class="fa-solid fa-trash-can"></i>';
+                btnManage.title = '管理列表';
+                btnUpload.style.display = 'flex';
+                btnDeleteConfirm.style.display = 'none';
+                itemsToDelete.clear();
+            }
             grid.classList.toggle('delete-mode', isDeleteMode);
+            renderGrid();
+        };
+
+        btnDeleteConfirm.onclick = async () => {
+            if (itemsToDelete.size === 0) return btnManage.click(); // 如果没选任何东西，直接退出管理模式
+
+            const confirm = await callGenericPopup(`确认删除选中的 ${itemsToDelete.size} 张卡面吗？`, POPUP_TYPE.CONFIRM);
+            if (!confirm) return;
+
+            // 将索引降序排列，从后往前删，避免索引偏移导致错乱
+            const indexes = Array.from(itemsToDelete).sort((a, b) => b - a);
+            
+            indexes.forEach((index) => {
+                if (data.selected === index) {
+                    data.selected = null;
+                } else if (data.selected > index) {
+                    data.selected -= 1;
+                }
+                data.images.splice(index, 1);
+            });
+
+            saveSettingsDebounced();
+            applyAltAvatars();
+            
+            btnManage.click(); // 退出管理模式
+            toastr.success('已成功删除选中卡面');
         };
         
         btnUpload.onclick = () => inputUpload.click();
         
         inputUpload.onchange = async (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
-            const b64 = await resizeImageToBase64(file);
-            data.images.push(b64);
+            const files = e.target.files;
+            if (!files || files.length === 0) return;
+            
+            toastr.info(`正在处理 ${files.length} 张图片，请稍候...`);
+            
+            for(let i = 0; i < files.length; i++) {
+                const b64 = await resizeImageToBase64(files[i]);
+                data.images.push(b64);
+            }
+            
             saveSettingsDebounced();
             renderGrid();
-            inputUpload.value = ''; 
+            inputUpload.value = ''; // 清空方便下次选择
+            toastr.success('所有图片上传完成！');
         };
         
         renderGrid();
     }, 100);
 }
+
+// ======================== 原生剪裁弹窗 ========================
 
 async function triggerNativeCropPopup(imgSrc) {
     const avatarId = getAvatarIdFromSrc(imgSrc);
@@ -363,7 +422,7 @@ setInterval(() => {
             const isEnabled = !!extension_settings.avatarCropEnabled;
             
             container.innerHTML = `
-                <span data-i18n="Avatar Crop">头像剪裁:</span>
+                <span data-i18n="Avatar Crop">头像剪裁：</span>
                 <select id="st-avatar-crop-select" class="widthNatural flex1 margin0 text_pole" title="开启后允许点击放大后的头像进行高级剪裁">
                     <option value="true" ${isEnabled ? 'selected' : ''}>启用</option>
                     <option value="false" ${!isEnabled ? 'selected' : ''}>禁用</option>
