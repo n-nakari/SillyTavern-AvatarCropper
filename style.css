@@ -1,13 +1,13 @@
-/* ===== 剪裁及控制栏 ===== */
+/* ===== 剪裁头像 & 控制面板 ===== */
 
 .zoomed_avatar .panelControlBar {
     align-items: center;
     opacity: 1 !important;
-    background: rgba(0, 0, 0, 0.7) !important;
+    background: rgba(0, 0, 0, 0.6) !important;
     border-radius: 8px;
-    padding: 5px 10px;
+    padding: 5px 10px 5px 0;
     display: flex;
-    gap: 15px;
+    gap: 10px;
 }
 
 .zoomed_avatar .panelControlBar .drag-grabber,
@@ -17,17 +17,26 @@
     opacity: 1 !important;
     font-size: calc(var(--mainFontSize)*1.3) !important;
     cursor: pointer;
+    align-items: center;
+    justify-content: center;
+    padding: 0 5px;
+    line-height: 1;
     color: white !important;
-    transition: all 0.2s;
+    transition: color 0.2s, transform 0.2s;
 }
 
 .st-avatar-ctrl-btn:hover {
-    transform: scale(1.1);
+    transform: scale(1.2);
 }
 
-/* 绑定按钮激活状态（绿色） */
-.st-avatar-ctrl-btn.bound-active {
+.zoomed_avatar .panelControlBar .dragClose {
+    height: 20px !important;
+}
+
+/* 绑定按钮激活状态 */
+#st-bind-btn.is-bound {
     color: #4CAF50 !important;
+    text-shadow: 0 0 8px rgba(76, 175, 80, 0.6);
 }
 
 /* ===== 扩展触控热区 ===== */
@@ -35,16 +44,12 @@
 .cropper-line::after {
     content: '';
     position: absolute;
-    top: -15px;
-    right: -15px;
-    bottom: -15px;
-    left: -15px;
+    top: -15px; right: -15px; bottom: -15px; left: -15px;
     background: transparent;
 }
 
 .cropper-point {
-    width: 12px !important;
-    height: 12px !important;
+    width: 12px !important; height: 12px !important;
     background-color: #3399ff !important;
     border-radius: 50% !important;
     opacity: 0.9 !important;
@@ -53,27 +58,22 @@
 .cropper-point::after {
     content: '';
     position: absolute;
-    top: -20px;
-    right: -20px;
-    bottom: -20px;
-    left: -20px;
+    top: -20px; right: -20px; bottom: -20px; left: -20px;
     background: transparent;
 }
 
 .cropper-point.point-se {
-    width: 16px !important;
-    height: 16px !important;
+    width: 16px !important; height: 16px !important;
 }
 
-/* ===== 替换图库面板 ===== */
+/* ===== 图库面板 (1:1 三排) ===== */
 
 #st-alt-avatar-panel .alt-avatar-grid {
     display: grid;
-    /* 1:1 比例，一排三个 */
     grid-template-columns: repeat(3, 1fr);
     gap: 15px;
     margin-top: 15px;
-    max-height: 70dvh;
+    max-height: 60dvh;
     overflow-y: auto;
     padding: 10px;
 }
@@ -89,6 +89,7 @@
     border-radius: 8px;
     aspect-ratio: 1 / 1;
     overflow: hidden;
+    background-color: #222;
 }
 
 #st-alt-avatar-panel .alt-avatar-item:hover {
@@ -106,7 +107,7 @@
     object-fit: cover;
 }
 
-/* ===== 多选删除模式 ===== */
+/* 多选删除模式 */
 #st-alt-avatar-panel .alt-avatar-item.to-delete {
     border-color: #ff4444;
     opacity: 0.6;
@@ -117,8 +118,7 @@
     font-family: 'Font Awesome 6 Free';
     font-weight: 900;
     position: absolute;
-    top: 50%;
-    left: 50%;
+    top: 50%; left: 50%;
     transform: translate(-50%, -50%);
     font-size: 3em;
     color: #ff4444;
