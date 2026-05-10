@@ -107,12 +107,23 @@ async function resizeImageToBase64(file) {
     });
 }
 
-// 模拟触发原生的ST上传和替换逻辑 (核心黑科技)
+// 模拟触发原生的ST上传和替换逻辑 (修复版)
 async function triggerNativeUpload(imgUrl, type) {
     try {
-        const response = await fetch(imgUrl);
+        toastr.info("正在提取图库数据...", "系统提示");
+        
+        // 修复Fetch路径问题，确保相对路径加上斜杠
+        let fetchUrl = imgUrl;
+        if (!fetchUrl.startsWith('http') && !fetchUrl.startsWith('data:') && !fetchUrl.startsWith('/')) {
+            fetchUrl = '/' + fetchUrl;
+        }
+        
+        const response = await fetch(fetchUrl);
+        if (!response.ok) throw new Error("无法读取图片实体文件");
+        
         const blob = await response.blob();
-        const file = new File([blob], `gallery_replaced_${Date.now()}.png`, { type: blob.type });
+        // 必须模拟成标准的 PNG File 格式，ST 原生才能识别
+        const file = new File([blob], `avatar_replaced_${Date.now()}.png`, { type: 'image/png' });
 
         const dataTransfer = new DataTransfer();
         dataTransfer.items.add(file);
@@ -122,12 +133,21 @@ async function triggerNativeUpload(imgUrl, type) {
         
         if (fileInput) {
             fileInput.files = dataTransfer.files;
-            // 触发原生事件。Char会弹窗询问是否覆盖，User会直接上传
-            fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+            
+            // 修复核心：必须使用 jQuery 的 trigger，因为 ST 原生的事件都是用 jQuery 绑定的
+            $(fileInput).trigger('change');
+            
+            if (type === 'char') {
+                toastr.success("已发送替换请求！请留意屏幕中间弹出的原生确认框，选择【Use as Image / 用作图片】以覆盖。");
+            } else {
+                toastr.success("用户的全局头像已替换完毕！");
+            }
+        } else {
+            toastr.error(`找不到 ST 原生的上传控件: ${inputId}`);
         }
     } catch (e) {
         console.error("Native upload trigger failed:", e);
-        toastr.error("触发原生替换失败");
+        toastr.error("触发原生替换失败: " + e.message);
     }
 }
 
@@ -143,10 +163,9 @@ function applyThemeBinds() {
         const escapedId = id.replace(/"/g, '\\"');
         const encodedId = encodeURIComponent(id).replace(/"/g, '\\"');
         
-        // 【关键】：这里加了极其严格的选择器限定，只作用于聊天区内的消息头像
+        // 限定：只作用于聊天区内的消息头像气泡
         let selector = '';
         if (id === 'user') {
-            // User的所有聊天头像 (User在聊天中的图片默认强制读取当前persona)
             selector = `#chat .mes[is_user="true"] .avatar img`;
         } else {
             selector = `#chat .mes .avatar img[src*="${escapedId}"], #chat .mes .avatar img[src*="${encodedId}"]`;
@@ -236,7 +255,6 @@ async function toggleBind(targetId, currentImgSrc, btnElement) {
         toastr.info('已解除该角色/用户在此主题下的头像绑定，恢复默认。');
     } else {
         // 绑定当前图片
-        // 如果当前是大图（非本地或未保存），我们保存一份用于聊天气泡
         const base64 = await getBase64FromUrl(currentImgSrc);
         const savedUrl = await saveToBackend(base64, `bind_${targetId}`);
         extension_settings.themeBinds[theme][targetId] = savedUrl || currentImgSrc;
@@ -254,7 +272,6 @@ async function triggerCropPopup(imgSrc, avatarInfo) {
     const base64Original = await getBase64FromUrl(imgSrc);
     const cropPromise = callGenericPopup('', POPUP_TYPE.CROP, '', { cropAspect: 1, cropImage: base64Original });
 
-    // 让剪裁框滚轮缩放速度慢一点
     setTimeout(() => {
         const cropperImg = document.querySelector('#dialogue_popup .cropper-hidden');
         if (cropperImg && cropperImg.cropper) {
@@ -265,7 +282,6 @@ async function triggerCropPopup(imgSrc, avatarInfo) {
 
     const croppedImageBase64 = await cropPromise;
     if (croppedImageBase64) {
-        // 保存实体文件
         const savedUrl = await saveToBackend(croppedImageBase64, `crop_${avatarInfo.id}`);
         if (!savedUrl) return toastr.error("保存剪裁图片失败");
 
@@ -310,7 +326,16 @@ async function openGallery(avatarInfo) {
 
     callGenericPopup(html, POPUP_TYPE.CONFIRM, '', { wide: true, large: true }).then((confirm) => {
         if (confirm && selectedUrl) {
-            // 用户点击了OK，触发全局替换！
+            // 关键：如果你替换了全局头像，必须自动解除当前皮肤里的气泡绑定，否则你依然只能看到旧的绑定图！
+            const theme = getCurrentTheme();
+            if (extension_settings.themeBinds[theme] && extension_settings.themeBinds[theme][id]) {
+                delete extension_settings.themeBinds[theme][id];
+                saveSettingsDebounced();
+                applyThemeBinds();
+                console.log("Cleared local bind to show the newly replaced global avatar.");
+            }
+
+            // 触发全局替换！
             triggerNativeUpload(selectedUrl, avatarInfo.type);
         }
     });
@@ -330,6 +355,8 @@ async function openGallery(avatarInfo) {
                 if (itemsToDelete.has(index)) itemDiv.classList.add('to-delete');
                 
                 itemDiv.innerHTML = `<img src="${url}">`;
+                
+                // 单击选择 / 删除选中
                 itemDiv.onclick = (e) => {
                     if (isDeleteMode) {
                         e.stopPropagation();
@@ -341,6 +368,16 @@ async function openGallery(avatarInfo) {
                         renderGrid();
                     }
                 };
+                
+                // 双击直接确认替换！(UX 优化)
+                itemDiv.ondblclick = (e) => {
+                    if (!isDeleteMode) {
+                        selectedUrl = url;
+                        const okBtn = document.getElementById('dialogue_popup_ok');
+                        if (okBtn) okBtn.click();
+                    }
+                };
+                
                 grid.appendChild(itemDiv);
             });
         }
