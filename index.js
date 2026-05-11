@@ -2,17 +2,13 @@ import { extension_settings } from '../../../extensions.js';
 import { saveSettingsDebounced, getRequestHeaders } from '../../../../script.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
-// 清理旧版本的Base64体积庞大缓存
-if (extension_settings.altAvatars) delete extension_settings.altAvatars;
-if (extension_settings.avatarCroppedImages) delete extension_settings.avatarCroppedImages;
-
-// 初始化新的数据结构
+// 初始化数据结构
 if (extension_settings.avatarClickZoomEnabled === undefined) extension_settings.avatarClickZoomEnabled = false;
 if (!extension_settings.userGalleryImages) extension_settings.userGalleryImages = [];
 if (!extension_settings.charGalleryImages) extension_settings.charGalleryImages = {};
 if (!extension_settings.avatarThemeBindings) extension_settings.avatarThemeBindings = {};
-// 专项保存每个主题中角色的最新剪裁图片路径，避免污染图库并便于新旧替换
-if (!extension_settings.avatarThemeCrops) extension_settings.avatarThemeCrops = {};
+// 独立追踪各个主题的剪裁图片，避免污染图库并支持自我替换
+if (!extension_settings.themeCroppedImages) extension_settings.themeCroppedImages = {};
 
 function getAvatarIdFromSrc(src) {
     try {
@@ -65,7 +61,7 @@ async function uploadToBackend(base64Data) {
     const requestBody = {
         image: b64,
         format: 'png',
-        ch_name: '', // 保存至默认的 user/images
+        ch_name: '', 
         filename: filename
     };
     
@@ -137,7 +133,7 @@ async function resizeImageToBase64(file) {
     });
 }
 
-// ======================== CSS 引擎及 DOM 同步更新 ========================
+// ======================== CSS 及 UI 刷新 ========================
 
 function applyAvatarCss() {
     const theme = getCurrentTheme();
@@ -172,6 +168,30 @@ function applyAvatarCss() {
     styleTag.textContent = cssString;
 }
 
+// 实时更新放大界面的高度计算与按钮变色（不关闭弹窗）
+function updateActiveZoomedAvatar(avatarId) {
+    const zoomedDiv = document.querySelector('.zoomed_avatar');
+    if (!zoomedDiv) return;
+
+    const img = zoomedDiv.querySelector('img');
+    const bindBtn = zoomedDiv.querySelector('#st-bind-btn');
+    const activePath = getBinding(getCurrentTheme(), avatarId);
+
+    if (activePath) {
+        if (img) {
+            img.style.content = 'none'; // 解除CSS override防止尺寸冲突
+            img.src = activePath; // 物理替换src，迫使浏览器计算新高度
+        }
+        if (bindBtn) bindBtn.classList.add('is-bound');
+    } else {
+        if (img) {
+            img.style.content = '';
+            if (img.dataset.originalSrc) img.src = img.dataset.originalSrc;
+        }
+        if (bindBtn) bindBtn.classList.remove('is-bound');
+    }
+}
+
 function updateClickZoomState() {
     const isEnabled = !!extension_settings.avatarClickZoomEnabled;
     let pointerStyle = document.getElementById('st-avatar-crop-pointer-events');
@@ -187,24 +207,6 @@ function updateClickZoomState() {
         `;
     } else if (pointerStyle) {
         pointerStyle.remove();
-    }
-}
-
-// 即刻更新打开状态中的 Zoomed Avatar 属性
-function updateZoomedAvatarDOM(boundPath, avatarId) {
-    const zoomedWrapper = document.querySelector('.zoomed_avatar');
-    if (zoomedWrapper && zoomedWrapper.dataset.stOriginalId === avatarId) {
-        const img = zoomedWrapper.querySelector('img');
-        if (img) {
-            img.src = boundPath || img.dataset.originalSrc;
-            zoomedWrapper.style.width = 'auto';
-            zoomedWrapper.style.height = 'auto';
-        }
-        const bindBtn = zoomedWrapper.querySelector('#st-bind-btn');
-        if (bindBtn) {
-            if (boundPath) bindBtn.classList.add('is-bound');
-            else bindBtn.classList.remove('is-bound');
-        }
     }
 }
 
@@ -234,6 +236,7 @@ async function deleteImages(pathsToDelete, avatarId, isUser) {
 
     saveSettingsDebounced();
     applyAvatarCss();
+    updateActiveZoomedAvatar(avatarId);
 }
 
 // ======================== 图库面板 ========================
@@ -245,15 +248,16 @@ async function openGallery(isUser, avatarId, originalSrc) {
     
     const html = `
         <div id="st-alt-avatar-panel">
-            <div id="st-alt-avatar-panel-header">
-                <h3 id="st-alt-avatar-panel-title">${isUser ? '用户图库' : '角色图库'}</h3>
-                <div id="st-alt-avatar-panel-actions">
+            <div class="st-panel-header">
+                <h3>${isUser ? '用户图库' : '角色图库'}</h3>
+                <div class="st-panel-actions">
                     ${!isUser ? `<div class="menu_button menu_button_icon margin0" id="btn-alt-import"><i class="fa-solid fa-file-import"></i></div>
                                  <div class="menu_button menu_button_icon margin0" id="btn-alt-export"><i class="fa-solid fa-file-export"></i></div>` : ''}
                     <div class="menu_button menu_button_icon margin0" id="btn-alt-upload"><i class="fa-solid fa-upload"></i></div>
                     <div class="menu_button menu_button_icon margin0" id="btn-alt-manage"><i class="fa-solid fa-trash-can"></i></div>
-                    <div class="menu_button margin0" id="btn-alt-delete-confirm"><i class="fa-solid fa-trash-can"></i><span style="margin-left: 5px;">点击删除</span></div>
-                    <div id="btn-alt-close"><i class="fa-solid fa-xmark"></i></div>
+                    <div class="menu_button margin0" id="btn-alt-delete-confirm"><i class="fa-solid fa-trash-can"></i> <span>点击删除</span></div>
+                    <!-- 原生关闭按钮 -->
+                    <div class="menu_button menu_button_icon margin0" id="btn-alt-close"><i class="fa-solid fa-xmark"></i></div>
                 </div>
             </div>
             <input type="file" id="input-alt-upload" style="display:none;" accept="image/*" multiple>
@@ -265,20 +269,6 @@ async function openGallery(isUser, avatarId, originalSrc) {
     callGenericPopup(html, POPUP_TYPE.TEXT, '', { wide: true, large: true });
     
     setTimeout(() => {
-        // 双重保险：确保隐藏原生弹出框控件
-        const popupControls = document.querySelector('.popup-controls');
-        if (popupControls && document.getElementById('st-alt-avatar-panel')) {
-            popupControls.style.display = 'none';
-        }
-
-        const btnClose = document.getElementById('btn-alt-close');
-        if (btnClose) {
-            btnClose.onclick = () => {
-                const cancelBtn = document.querySelector('.popup-controls .cancel');
-                if (cancelBtn) cancelBtn.click();
-            };
-        }
-
         const grid = document.getElementById('grid-alt-avatars');
         if(!grid) return;
 
@@ -287,11 +277,14 @@ async function openGallery(isUser, avatarId, originalSrc) {
         const btnDeleteConfirm = document.getElementById('btn-alt-delete-confirm');
         const btnImport = document.getElementById('btn-alt-import');
         const btnExport = document.getElementById('btn-alt-export');
+        const btnClose = document.getElementById('btn-alt-close');
         const inputUpload = document.getElementById('input-alt-upload');
         const inputImport = document.getElementById('input-alt-import');
         
         let isDeleteMode = false;
         let itemsToDelete = new Set();
+
+        btnClose.onclick = () => document.getElementById('dialogue_popup_cancel')?.click();
 
         function renderGrid() {
             grid.innerHTML = '';
@@ -335,11 +328,12 @@ async function openGallery(isUser, avatarId, originalSrc) {
                 toastr.success('已恢复原图并解除绑定');
             } else {
                 extension_settings.avatarThemeBindings[theme][avatarId] = path;
+                toastr.success('已应用并绑定至当前主题。');
             }
             
             saveSettingsDebounced();
             applyAvatarCss();
-            updateZoomedAvatarDOM(path, avatarId); // 即刻同步修改底层的 Zoomed Avatar UI 高度及绿色状态
+            updateActiveZoomedAvatar(avatarId);
             renderGrid();
         }
 
@@ -381,10 +375,6 @@ async function openGallery(isUser, avatarId, originalSrc) {
             if (!confirm) return;
 
             await deleteImages(Array.from(itemsToDelete), avatarId, isUser);
-            // 若删除的刚好是已绑定图片，重置底层的 Zoomed Avatar 为原图状态
-            if (!getBinding(getCurrentTheme(), avatarId)) {
-                updateZoomedAvatarDOM(null, avatarId);
-            }
             btnManage.click(); 
             toastr.success('已删除图片');
         };
@@ -471,10 +461,14 @@ async function openGallery(isUser, avatarId, originalSrc) {
 
 // ======================== 注入增强控制栏 ========================
 
-async function triggerNativeCropPopup(imgSrc, avatarId) {
+async function triggerNativeCropPopup(originalSrc, avatarId, isUser) {
     if (avatarId === 'thumbnail') return toastr.error('无法获取图片');
 
-    let base64Original = await getBase64FromUrl(imgSrc);
+    // 智能获取被剪裁目标（如果当前有绑定图片，就基于绑定的图片进行剪裁，否则基于原图）
+    const theme = getCurrentTheme();
+    const activePath = getBinding(theme, avatarId);
+    let base64Original = activePath ? await getBase64FromUrl(activePath) : await getBase64FromUrl(originalSrc);
+
     const cropPromise = callGenericPopup('', POPUP_TYPE.CROP, '', { cropAspect: 0, cropImage: base64Original });
 
     setTimeout(() => {
@@ -489,31 +483,28 @@ async function triggerNativeCropPopup(imgSrc, avatarId) {
     const croppedImageBase64 = await cropPromise;
 
     if (croppedImageBase64) {
-        const theme = getCurrentTheme();
-        
-        // 自动替换当前主题当前角色的最新剪裁记录，释放旧的空间且不进入图库
-        if (!extension_settings.avatarThemeCrops) extension_settings.avatarThemeCrops = {};
-        if (!extension_settings.avatarThemeCrops[theme]) extension_settings.avatarThemeCrops[theme] = {};
-        
-        const oldCropPath = extension_settings.avatarThemeCrops[theme][avatarId];
-        if (oldCropPath) {
-            await deleteFromBackend(oldCropPath);
-        }
-
         const path = await uploadToBackend(croppedImageBase64);
         if (!path) return toastr.error('无法保存图片');
 
-        extension_settings.avatarThemeCrops[theme][avatarId] = path;
+        if (!extension_settings.themeCroppedImages) extension_settings.themeCroppedImages = {};
+        if (!extension_settings.themeCroppedImages[theme]) extension_settings.themeCroppedImages[theme] = {};
 
-        // 自动激活绑定状态
+        // 如果在当前主题中之前剪裁过，直接删除旧的剪裁文件释放空间
+        const oldCrop = extension_settings.themeCroppedImages[theme][avatarId];
+        if (oldCrop) {
+            await deleteFromBackend(oldCrop);
+        }
+
+        // 保存本次最新剪裁并自动绑定
+        extension_settings.themeCroppedImages[theme][avatarId] = path;
+
         if (!extension_settings.avatarThemeBindings) extension_settings.avatarThemeBindings = {};
         if (!extension_settings.avatarThemeBindings[theme]) extension_settings.avatarThemeBindings[theme] = {};
         extension_settings.avatarThemeBindings[theme][avatarId] = path;
         
         saveSettingsDebounced();
         applyAvatarCss(); 
-        updateZoomedAvatarDOM(path, avatarId); // 立刻修正UI高宽及激活绿色按钮
-        
+        updateActiveZoomedAvatar(avatarId);
         toastr.success('已应用并绑定至当前主题。');
     }
 }
@@ -524,38 +515,31 @@ function injectControlBarButtons(zoomedDiv) {
     const controlBar = zoomedDiv.querySelector('.panelControlBar');
     if (!controlBar) return;
 
-    const img = zoomedDiv.querySelector('img');
-    if (!img) return;
-    
-    const originalSrc = img.src;
-
-    if (!zoomedDiv.dataset.stOriginalId) {
-        zoomedDiv.dataset.stOriginalId = getAvatarIdFromSrc(originalSrc);
-        img.dataset.originalSrc = originalSrc;
-    }
-    
-    const avatarId = zoomedDiv.dataset.stOriginalId;
-    const isUser = isUserAvatar(img.dataset.originalSrc);
-    const theme = getCurrentTheme();
-
-    const boundPath = getBinding(theme, avatarId);
-    if (boundPath) {
-        // 防止高度依然是原图，强制加载并刷新高宽
-        updateZoomedAvatarDOM(boundPath, avatarId);
-    }
-
     const btnContainer = document.createElement('div');
     btnContainer.className = 'st-avatar-injected-btns';
 
-    // 1. 剪裁按钮（若已绑定图片，优先剪裁已绑定图片）
+    const img = zoomedDiv.querySelector('img');
+    if (!img) return;
+
+    // 保存原图src到dataset中供后续恢复使用
+    if (!img.dataset.originalSrc) {
+        img.dataset.originalSrc = img.src;
+    }
+    
+    const originalSrc = img.dataset.originalSrc;
+    const avatarId = getAvatarIdFromSrc(originalSrc);
+    const isUser = isUserAvatar(originalSrc);
+
+    // 打开放大页面时自动刷新一次其状态及尺寸
+    updateActiveZoomedAvatar(avatarId);
+
+    // 1. 剪裁按钮
     const cropBtn = document.createElement('div');
     cropBtn.id = 'st-native-crop-btn';
     cropBtn.className = 'fa-solid fa-crop-simple';
     cropBtn.onclick = async (e) => {
         e.stopPropagation(); 
-        zoomedDiv.click(); 
-        const currentSrcToCrop = getBinding(getCurrentTheme(), avatarId) || img.dataset.originalSrc;
-        await triggerNativeCropPopup(currentSrcToCrop, avatarId);
+        await triggerNativeCropPopup(originalSrc, avatarId, isUser);
     };
 
     // 2. 图库按钮
@@ -564,27 +548,25 @@ function injectControlBarButtons(zoomedDiv) {
     galleryBtn.className = 'fa-solid fa-images';
     galleryBtn.onclick = (e) => {
         e.stopPropagation();
-        openGallery(isUser, avatarId, img.dataset.originalSrc);
+        openGallery(isUser, avatarId, originalSrc);
     };
 
     // 3. 绑定按钮
     const bindBtn = document.createElement('div');
     bindBtn.id = 'st-bind-btn';
     bindBtn.className = 'fa-solid fa-link';
-    
-    if (boundPath) bindBtn.classList.add('is-bound');
 
     bindBtn.onclick = (e) => {
         e.stopPropagation();
-        const currentBoundPath = getBinding(getCurrentTheme(), avatarId);
-        if (currentBoundPath) {
+        const boundPath = getBinding(getCurrentTheme(), avatarId);
+        if (boundPath) {
             delete extension_settings.avatarThemeBindings[getCurrentTheme()][avatarId];
             saveSettingsDebounced();
             applyAvatarCss();
-            updateZoomedAvatarDOM(null, avatarId);
+            updateActiveZoomedAvatar(avatarId);
             toastr.success('已恢复原图并解除绑定');
         } else {
-            openGallery(isUser, avatarId, img.dataset.originalSrc);
+            openGallery(isUser, avatarId, originalSrc);
         }
     };
 
@@ -660,12 +642,10 @@ jQuery(async () => {
                             if (currentSrc && !currentSrc.startsWith('blob:') && !currentSrc.startsWith('data:')) {
                                 const newAvatarId = getAvatarIdFromSrc(currentSrc);
                                 if (newAvatarId !== oldAvatarId && newAvatarId !== 'thumbnail') {
-                                    // 迁移图库列表
                                     if (extension_settings.charGalleryImages && extension_settings.charGalleryImages[oldAvatarId]) {
                                         extension_settings.charGalleryImages[newAvatarId] = JSON.parse(JSON.stringify(extension_settings.charGalleryImages[oldAvatarId]));
                                         delete extension_settings.charGalleryImages[oldAvatarId];
                                     }
-                                    // 迁移绑定数据
                                     if (extension_settings.avatarThemeBindings) {
                                         for (const t in extension_settings.avatarThemeBindings) {
                                             if (extension_settings.avatarThemeBindings[t][oldAvatarId]) {
