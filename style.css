@@ -1,18 +1,5 @@
 /* ===== 剪裁头像及控制栏 ===== */
 
-/* 强制重写放大头像内联样式，根据图片自适应并防止错位 */
-.zoomed_avatar.draggable {
-    height: auto !important;
-    width: auto !important;
-    max-height: 95dvh !important;
-    max-width: 95dvw !important;
-}
-
-.zoomed_avatar.draggable img {
-    max-height: 85dvh !important;
-    object-fit: contain !important;
-}
-
 .zoomed_avatar .panelControlBar {
     align-items: center;
     opacity: 1 !important;
@@ -21,16 +8,10 @@
     padding: 5px 10px 5px 0;
 }
 
-.st-avatar-injected-btns {
-    display: flex;
-    gap: 10px;
-}
-
 .zoomed_avatar .panelControlBar .drag-grabber,
 .zoomed_avatar .panelControlBar .dragClose,
 #st-native-crop-btn,
-#st-gallery-btn,
-#st-bind-btn {
+#st-gallery-btn {
     filter: none !important;
     opacity: 1 !important;
     font-size: calc(var(--mainFontSize)*1.3) !important;
@@ -44,14 +25,13 @@
 .zoomed_avatar .panelControlBar .drag-grabber.fa-solid,
 .zoomed_avatar .panelControlBar .dragClose.fa-solid,
 #st-native-crop-btn.fa-solid,
-#st-gallery-btn.fa-solid,
-#st-bind-btn.fa-solid {
+#st-gallery-btn.fa-solid {
     font-size: calc(var(--mainFontSize)*1.3) !important;
     color: white !important;
 }
 
-#st-bind-btn.is-bound {
-    color: #4CAF50 !important;
+.st-avatar-injected-btns {
+    display: flex;
 }
 
 .dragClose {
@@ -94,6 +74,23 @@
 }
 
 /* ===== 图库面板 ===== */
+
+.st-alt-avatar-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--SmartThemeBodyColor, #555);
+    padding-bottom: 10px;
+}
+
+.st-alt-avatar-header h3 {
+    margin: 0;
+}
+
+.st-alt-avatar-tools {
+    display: flex;
+    align-items: center;
+}
 
 #st-alt-avatar-panel .alt-avatar-grid {
     display: grid;
@@ -153,13 +150,17 @@
 
 #btn-alt-delete-confirm {
     display: none;
-    flex-direction: row;
-    align-items: center;
     color: #ff4444;
     cursor: pointer;
+    flex-direction: row;
+    align-items: center;
     font-weight: bold;
 }
 
 #btn-alt-delete-confirm.active {
     display: flex !important;
+}
+
+#btn-alt-delete-confirm span {
+    margin-left: 5px;
 }
