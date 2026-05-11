@@ -73,12 +73,17 @@ setInterval(() => {
 
 let uploadCounter = 0; // 用于保证四位数字简短且在批量导入时不重复
 
-async function uploadToBackend(base64Data, prefix = "image") {
-    uploadCounter = (uploadCounter + 1) % 10000;
-    const b64 = base64Data.replace(/^data:image\/\w+;base64,/, '');
-    const suffix = uploadCounter.toString().padStart(4, '0');
-    const filename = `${prefix}_${suffix}`;
+async function uploadToBackend(base64Data, prefix = "image", exactFilename = null) {
+    let filename;
+    if (exactFilename) {
+        filename = exactFilename;
+    } else {
+        uploadCounter = (uploadCounter + 1) % 10000;
+        const suffix = uploadCounter.toString().padStart(4, '0');
+        filename = `${prefix}_${suffix}`;
+    }
     
+    const b64 = base64Data.replace(/^data:image\/\w+;base64,/, '');
     const requestBody = {
         image: b64,
         format: 'png',
@@ -103,6 +108,7 @@ async function uploadToBackend(base64Data, prefix = "image") {
 }
 
 async function deleteFromBackend(path) {
+    if (!path) return;
     try {
         await fetch('/api/images/delete', {
             method: 'POST',
@@ -240,7 +246,7 @@ async function deleteImages(pathsToDelete, avatarId, isUser) {
         if (themeCrops[avatarId]) {
             for (const baseImg in themeCrops[avatarId]) {
                 if (pathsToDelete.includes(baseImg)) {
-                    await deleteFromBackend(themeCrops[avatarId][baseImg]);
+                    await deleteFromBackend(themeCrops[avatarId][baseImg].split('?')[0]);
                     delete themeCrops[avatarId][baseImg];
                 }
             }
@@ -249,7 +255,7 @@ async function deleteImages(pathsToDelete, avatarId, isUser) {
 
     // 从服务器删除原图
     for (const path of pathsToDelete) {
-        await deleteFromBackend(path);
+        await deleteFromBackend(path.split('?')[0]);
     }
 
     saveSettingsDebounced();
@@ -482,7 +488,6 @@ async function openGallery(isUser, avatarId, originalSrc, zoomedDiv) {
                 toastr.success('已应用并绑定至当前主题');
             }
 
-            // 注意：现在我们不会清理旧的剪裁缓存文件了！它们会一直与对应的原图/底图绑定保留
             saveSettingsDebounced();
             applyAvatarCss();
             
@@ -501,6 +506,12 @@ async function triggerNativeCropPopup(imgSrc, avatarId, isUser, zoomedDiv) {
     // 强制使用当前图库选定的原大尺寸图（若无则用原图），从而保证剪裁的是无损的基准图像
     const baseImage = extension_settings.avatarThemeBindings?.[theme]?.[avatarId] || 'default';
     const sourcePath = baseImage !== 'default' ? baseImage : imgSrc;
+    
+    // 解析出文件基础名用于剪裁命名（满足 “陈晓_0001” -> “陈晓_0001_1” 的需求）
+    const cleanSourcePath = sourcePath.split('?')[0];
+    let sourceFilename = cleanSourcePath.split('/').pop().split('.').slice(0, -1).join('.') || cleanSourcePath.split('/').pop();
+    sourceFilename = decodeURIComponent(sourceFilename);
+    const cropFilename = `${sourceFilename}_1`;
 
     let base64Original = await getBase64FromUrl(sourcePath);
     const cropPromise = callGenericPopup('', POPUP_TYPE.CROP, '', { cropAspect: 0, cropImage: base64Original });
@@ -517,8 +528,8 @@ async function triggerNativeCropPopup(imgSrc, avatarId, isUser, zoomedDiv) {
     const croppedImageBase64 = await cropPromise;
 
     if (croppedImageBase64) {
-        const avatarNamePrefix = avatarId.split('.')[0].replace(/^\d{13,}-/, '');
-        const path = await uploadToBackend(croppedImageBase64, avatarNamePrefix);
+        // 使用明确的剪裁文件名上传，绕过默认随机/计数命名
+        const path = await uploadToBackend(croppedImageBase64, null, cropFilename);
         if (!path) return toastr.error('无法保存图片');
 
         if (!extension_settings.avatarThemeCrops) extension_settings.avatarThemeCrops = {};
@@ -528,11 +539,11 @@ async function triggerNativeCropPopup(imgSrc, avatarId, isUser, zoomedDiv) {
         // 如果对于当前的 baseImage 之前已有剪裁图，覆盖前先删除旧的剪裁文件节约空间
         const oldCrop = extension_settings.avatarThemeCrops[theme][avatarId][baseImage];
         if (oldCrop) {
-            deleteFromBackend(oldCrop);
+            await deleteFromBackend(oldCrop.split('?')[0]);
         }
 
-        // 将新的剪裁图挂载在对应的 baseImage 下
-        extension_settings.avatarThemeCrops[theme][avatarId][baseImage] = path;
+        // 将新的剪裁图挂载在对应的 baseImage 下，并加时间戳破除浏览器缓存
+        extension_settings.avatarThemeCrops[theme][avatarId][baseImage] = `${path}?v=${Date.now()}`;
         
         saveSettingsDebounced();
         applyAvatarCss(); 
@@ -597,11 +608,11 @@ function injectControlBarButtons(zoomedDiv) {
         revertBtn.title = '取消剪裁 (恢复未剪裁的状态)';
         revertBtn.onclick = async (e) => {
             e.stopPropagation();
-            deleteFromBackend(activeCrop);
+            await deleteFromBackend(activeCrop.split('?')[0]);
             delete extension_settings.avatarThemeCrops[theme][avatarId][baseImagePath];
             saveSettingsDebounced();
             applyAvatarCss();
-            toastr.success('已取消剪裁，恢复原始比例');
+            toastr.success('已恢复原图');
             
             const closeBtn = zoomedDiv.querySelector('.dragClose');
             if (closeBtn) closeBtn.click();
