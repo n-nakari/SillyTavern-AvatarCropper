@@ -6,13 +6,26 @@ import { callGenericPopup, POPUP_TYPE, POPUP_RESULT } from '../../../popup.js';
 if (extension_settings.altAvatars) delete extension_settings.altAvatars;
 if (extension_settings.avatarCroppedImages) delete extension_settings.avatarCroppedImages;
 
-// 初始化新的数据结构（指向后端实体文件路径）
+// 初始化新的数据结构
 if (extension_settings.avatarClickZoomEnabled === undefined) extension_settings.avatarClickZoomEnabled = false;
 if (!extension_settings.userGalleryImages) extension_settings.userGalleryImages = [];
 if (!extension_settings.charGalleryImages) extension_settings.charGalleryImages = {};
 if (!extension_settings.avatarThemeBindings) extension_settings.avatarThemeBindings = {};
-// avatarThemeCrops 结构变更为: [theme][avatarId][baseImageKey] = cropPath
 if (!extension_settings.avatarThemeCrops) extension_settings.avatarThemeCrops = {};
+
+// 结构迁移：适配旧版单图剪裁配置转换为多图独立剪裁配置
+if (extension_settings.avatarThemeCrops) {
+    for (const theme in extension_settings.avatarThemeCrops) {
+        for (const avatarId in extension_settings.avatarThemeCrops[theme]) {
+            const val = extension_settings.avatarThemeCrops[theme][avatarId];
+            if (typeof val === 'string') {
+                const baseImageKey = extension_settings.avatarThemeBindings?.[theme]?.[avatarId] || avatarId;
+                extension_settings.avatarThemeCrops[theme][avatarId] = {};
+                extension_settings.avatarThemeCrops[theme][avatarId][baseImageKey] = val;
+            }
+        }
+    }
+}
 
 function getAvatarIdFromSrc(src) {
     try {
@@ -59,18 +72,13 @@ setInterval(() => {
 
 // ======================== 后端文件操作 ========================
 
-let uploadCounter = 0;
+let uploadCounter = 0; // 用于保证四位数字简短且在批量导入时不重复
 
-async function uploadToBackend(base64Data, prefix = "image", exactFilename = null) {
+async function uploadToBackend(base64Data, prefix = "image") {
+    uploadCounter = (uploadCounter + 1) % 10000;
     const b64 = base64Data.replace(/^data:image\/\w+;base64,/, '');
-    let filename = exactFilename;
-    
-    // 如果没有指定精确文件名，则使用自增四位数后缀
-    if (!filename) {
-        uploadCounter = (uploadCounter + 1) % 10000;
-        const suffix = uploadCounter.toString().padStart(4, '0');
-        filename = `${prefix}_${suffix}`;
-    }
+    const suffix = uploadCounter.toString().padStart(4, '0');
+    const filename = `${prefix}_${suffix}`;
     
     const requestBody = {
         image: b64,
@@ -91,6 +99,30 @@ async function uploadToBackend(base64Data, prefix = "image", exactFilename = nul
         }
     } catch(e) {
         console.error('Upload to backend failed', e);
+    }
+    return null;
+}
+
+async function uploadToBackendExact(base64Data, exactFilename) {
+    const b64 = base64Data.replace(/^data:image\/\w+;base64,/, '');
+    const requestBody = {
+        image: b64,
+        format: 'png',
+        ch_name: '', 
+        filename: exactFilename
+    };
+    try {
+        const response = await fetch('/api/images/upload', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify(requestBody)
+        });
+        if (response.ok) {
+            const data = await response.json();
+            return data.path; 
+        }
+    } catch(e) {
+        console.error('Upload exact crop to backend failed', e);
     }
     return null;
 }
@@ -155,25 +187,30 @@ function applyAvatarCss() {
     const crops = extension_settings.avatarThemeCrops?.[theme] || {};
     let cssString = '';
     
-    // 找出所有在当前主题下被绑定或者被剪裁过的人物
+    // 整合当前主题下所有需要覆盖的头像ID
+    const activeImages = {};
     const allAvatarIds = new Set([...Object.keys(bindings), ...Object.keys(crops)]);
-    
+
     for (const avatarId of allAvatarIds) {
         if (avatarId === 'thumbnail') continue;
+        
+        // 获取基准图：若无绑定图，则以本身ID为原图依据
+        const baseImageKey = bindings[avatarId] || avatarId;
+        let displayPath = baseImageKey;
 
-        // 向下兼容：旧版缓存若是字符串，迁移为对象
-        if (typeof crops[avatarId] === 'string') {
-            const oldCropPath = crops[avatarId];
-            const currentBind = bindings[avatarId] || 'default';
-            crops[avatarId] = { [currentBind]: oldCropPath };
-            saveSettingsDebounced();
+        // 判断此基准图在当前主题是否拥有独立裁切版本
+        if (crops[avatarId] && crops[avatarId][baseImageKey]) {
+            displayPath = crops[avatarId][baseImageKey];
         }
 
-        const baseImageKey = bindings[avatarId] || 'default';
-        // 优先使用该基底图的剪裁图，若无剪裁图则使用该绑定的原图
-        const activeImagePath = crops[avatarId]?.[baseImageKey] || bindings[avatarId];
-
-        if (!activeImagePath) continue;
+        // 如果最终展示的路径与默认原生ID不同，则需要写入CSS
+        if (displayPath !== avatarId) {
+            activeImages[avatarId] = displayPath;
+        }
+    }
+    
+    for (const [avatarId, imagePath] of Object.entries(activeImages)) {
+        if (!imagePath) continue;
 
         const escapedId = avatarId.replace(/"/g, '\\"');
         const encodedId = encodeURIComponent(avatarId).replace(/"/g, '\\"');
@@ -185,7 +222,7 @@ function applyAvatarCss() {
             #avatar_load_preview[src*="${encodedId}"],
             .zoomed_avatar img[src*="${escapedId}"],
             .zoomed_avatar img[src*="${encodedId}"] {
-                content: url("${activeImagePath}") !important;
+                content: url("${imagePath}") !important;
                 object-fit: cover !important;
             }
         `;
@@ -227,25 +264,21 @@ async function deleteImages(pathsToDelete, avatarId, isUser) {
         extension_settings.charGalleryImages[avatarId] = extension_settings.charGalleryImages[avatarId].filter(p => !pathsToDelete.includes(p));
     }
 
+    // 清理绑定数据与该图片的依附剪裁图
     if (extension_settings.avatarThemeBindings) {
         for (const theme in extension_settings.avatarThemeBindings) {
             const bindings = extension_settings.avatarThemeBindings[theme];
-            for (const key in bindings) {
-                if (pathsToDelete.includes(bindings[key])) {
-                    delete bindings[key];
-                }
+            if (pathsToDelete.includes(bindings[avatarId])) {
+                delete bindings[avatarId];
             }
         }
     }
-
-    // 联动清理对应的剪裁图
     if (extension_settings.avatarThemeCrops) {
         for (const theme in extension_settings.avatarThemeCrops) {
             if (extension_settings.avatarThemeCrops[theme][avatarId]) {
                 for (const deletedPath of pathsToDelete) {
-                    const cropPath = extension_settings.avatarThemeCrops[theme][avatarId][deletedPath];
-                    if (cropPath) {
-                        await deleteFromBackend(cropPath);
+                    if (extension_settings.avatarThemeCrops[theme][avatarId][deletedPath]) {
+                        deleteFromBackend(extension_settings.avatarThemeCrops[theme][avatarId][deletedPath]);
                         delete extension_settings.avatarThemeCrops[theme][avatarId][deletedPath];
                     }
                 }
@@ -291,7 +324,7 @@ async function openGallery(isUser, avatarId, originalSrc, zoomedDiv) {
     let isDeleteMode = false;
     let itemsToDelete = new Set();
     
-    // 去除原文件名可能携带的 13位时间戳前缀
+    // 去除原文件名可能携带的 13位时间戳前缀（由SillyTavern生成的User头像通常有）
     const avatarNamePrefix = avatarId.split('.')[0].replace(/^\d{13,}-/, '');
 
     // 提前创建占位事件钩子
@@ -505,12 +538,9 @@ async function triggerNativeCropPopup(imgSrc, avatarId, isUser, zoomedDiv) {
     if (avatarId === 'thumbnail') return toastr.error('无法获取图片');
 
     const theme = getCurrentTheme();
-    // 强制使用当前图库选定的原大尺寸图（若无则用原图），从而保证剪裁的是无损的基准图像
-    let sourcePath = imgSrc;
-    const currentBind = extension_settings.avatarThemeBindings?.[theme]?.[avatarId];
-    if (currentBind) {
-        sourcePath = currentBind;
-    }
+    // 强制使用当前图库选定的原大尺寸图（若无则用原图），保证剪裁的是无损的基准图像
+    const baseImageKey = extension_settings.avatarThemeBindings?.[theme]?.[avatarId] || avatarId;
+    let sourcePath = extension_settings.avatarThemeBindings?.[theme]?.[avatarId] || imgSrc;
 
     let base64Original = await getBase64FromUrl(sourcePath);
     const cropPromise = callGenericPopup('', POPUP_TYPE.CROP, '', { cropAspect: 0, cropImage: base64Original });
@@ -527,31 +557,25 @@ async function triggerNativeCropPopup(imgSrc, avatarId, isUser, zoomedDiv) {
     const croppedImageBase64 = await cropPromise;
 
     if (croppedImageBase64) {
-        let baseName = avatarId.split('.')[0].replace(/^\d{13,}-/, '');
-        // 如果当前是图库图片，则从其路径提取纯文件名作为前缀
-        if (currentBind) {
-            baseName = currentBind.split('/').pop().split('?')[0].replace(/\.[^/.]+$/, "");
-        }
-        
-        // 精确命名：[原本的名称]_1
-        const exactFilename = `${baseName}_1`;
-        const path = await uploadToBackend(croppedImageBase64, null, exactFilename);
-        if (!path) return toastr.error('无法保存图片');
+        // 根据“图片原名_主题名字_1”的规律命名
+        const baseImageName = sourcePath.split('/').pop().split('.')[0];
+        const safeThemeName = theme.replace(/[^a-zA-Z0-9_\u4e00-\u9fa5]/g, '');
+        const exactFilename = `${baseImageName}_${safeThemeName}_1`;
 
         if (!extension_settings.avatarThemeCrops) extension_settings.avatarThemeCrops = {};
         if (!extension_settings.avatarThemeCrops[theme]) extension_settings.avatarThemeCrops[theme] = {};
         if (!extension_settings.avatarThemeCrops[theme][avatarId]) extension_settings.avatarThemeCrops[theme][avatarId] = {};
 
-        const baseKey = currentBind || 'default';
-
-        // 如果同主题、同基底图已有旧剪裁图，先从后端删掉以节约空间
-        const oldCropPath = extension_settings.avatarThemeCrops[theme][avatarId][baseKey];
-        if (oldCropPath && oldCropPath !== path) {
-            await deleteFromBackend(oldCropPath);
+        // 覆盖模式：若该基准图在该主题已有裁切版本，先将其删除
+        if (extension_settings.avatarThemeCrops[theme][avatarId][baseImageKey]) {
+            await deleteFromBackend(extension_settings.avatarThemeCrops[theme][avatarId][baseImageKey]);
         }
 
-        // 仅将裁切图与当前基底图绑定
-        extension_settings.avatarThemeCrops[theme][avatarId][baseKey] = path;
+        const path = await uploadToBackendExact(croppedImageBase64, exactFilename);
+        if (!path) return toastr.error('无法保存图片');
+
+        // 仅将裁切图设为临时覆盖（不进入图库）
+        extension_settings.avatarThemeCrops[theme][avatarId][baseImageKey] = path;
         
         saveSettingsDebounced();
         applyAvatarCss(); 
@@ -580,11 +604,7 @@ function injectControlBarButtons(zoomedDiv) {
     const originalSrc = img.src;
     const avatarId = getAvatarIdFromSrc(originalSrc);
     const isUser = isUserAvatar(originalSrc);
-    
     const theme = getCurrentTheme();
-    const currentBind = extension_settings.avatarThemeBindings?.[theme]?.[avatarId];
-    const baseKey = currentBind || 'default';
-    const currentCrop = extension_settings.avatarThemeCrops?.[theme]?.[avatarId]?.[baseKey];
 
     // 1. 剪裁按钮
     const cropBtn = document.createElement('div');
@@ -596,24 +616,35 @@ function injectControlBarButtons(zoomedDiv) {
         await triggerNativeCropPopup(originalSrc, avatarId, isUser, zoomedDiv);
     };
 
-    // 2. 恢复原图(取消剪裁)按钮 - 仅在存在剪裁图时显示
-    let revertCropBtn = null;
-    if (currentCrop) {
-        revertCropBtn = document.createElement('div');
-        revertCropBtn.id = 'st-revert-crop-btn';
-        revertCropBtn.className = 'fa-solid fa-rotate-left'; 
-        revertCropBtn.title = '取消剪裁并恢复图片原始比例';
-        revertCropBtn.onclick = async (e) => {
-            e.stopPropagation();
-            await deleteFromBackend(currentCrop);
-            delete extension_settings.avatarThemeCrops[theme][avatarId][baseKey];
+    // 2. 恢复原图(取消裁剪)按钮
+    const revertBtn = document.createElement('div');
+    revertBtn.id = 'st-revert-crop-btn';
+    revertBtn.className = 'fa-solid fa-arrow-rotate-left';
+    revertBtn.title = '恢复原图 (取消该图片的剪裁)';
+    
+    // 检查当前使用的基准图是否有剪裁配置，若有则显示该按钮
+    const baseImageKey = extension_settings.avatarThemeBindings?.[theme]?.[avatarId] || avatarId;
+    if (extension_settings.avatarThemeCrops?.[theme]?.[avatarId]?.[baseImageKey]) {
+        revertBtn.style.display = 'flex';
+    } else {
+        revertBtn.style.display = 'none';
+    }
+
+    revertBtn.onclick = async (e) => {
+        e.stopPropagation();
+        if (extension_settings.avatarThemeCrops?.[theme]?.[avatarId]?.[baseImageKey]) {
+            const cropPath = extension_settings.avatarThemeCrops[theme][avatarId][baseImageKey];
+            await deleteFromBackend(cropPath);
+            delete extension_settings.avatarThemeCrops[theme][avatarId][baseImageKey];
             saveSettingsDebounced();
             applyAvatarCss();
             toastr.success('已恢复原图');
+            revertBtn.style.display = 'none';
+            
             const closeBtn = zoomedDiv.querySelector('.dragClose');
             if (closeBtn) closeBtn.click();
-        };
-    }
+        }
+    };
 
     // 3. 图库按钮
     const galleryBtn = document.createElement('div');
@@ -625,8 +656,8 @@ function injectControlBarButtons(zoomedDiv) {
         openGallery(isUser, avatarId, originalSrc, zoomedDiv);
     };
 
+    btnContainer.appendChild(revertBtn);
     btnContainer.appendChild(cropBtn);
-    if (revertCropBtn) btnContainer.appendChild(revertCropBtn);
     btnContainer.appendChild(galleryBtn);
 
     const closeBtn = controlBar.querySelector('.dragClose');
@@ -702,7 +733,7 @@ jQuery(async () => {
                                         extension_settings.charGalleryImages[newAvatarId] = JSON.parse(JSON.stringify(extension_settings.charGalleryImages[oldAvatarId]));
                                         delete extension_settings.charGalleryImages[oldAvatarId];
                                     }
-                                    // 迁移图库绑定
+                                    // 迁移图库绑定与裁切数据
                                     if (extension_settings.avatarThemeBindings) {
                                         for (const t in extension_settings.avatarThemeBindings) {
                                             if (extension_settings.avatarThemeBindings[t][oldAvatarId]) {
@@ -711,7 +742,6 @@ jQuery(async () => {
                                             }
                                         }
                                     }
-                                    // 迁移剪裁数据
                                     if (extension_settings.avatarThemeCrops) {
                                         for (const t in extension_settings.avatarThemeCrops) {
                                             if (extension_settings.avatarThemeCrops[t][oldAvatarId]) {
