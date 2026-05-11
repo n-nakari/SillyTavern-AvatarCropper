@@ -1,16 +1,8 @@
 /* ===== 剪裁头像及控制栏 ===== */
 
-.zoomed_avatar {
-    width: auto !important;
+.zoomed_avatar.draggable {
     height: auto !important;
-    max-width: 90vw !important;
-    max-height: 90vh !important;
-}
-
-.zoomed_avatar img {
-    max-width: 100%;
-    max-height: calc(90vh - 40px);
-    object-fit: contain;
+    width: auto !important;
 }
 
 .zoomed_avatar .panelControlBar {
@@ -147,12 +139,12 @@
 
 #btn-alt-delete-confirm {
     display: none;
-    flex-direction: row;
-    align-items: center;
+    color: #ff4444;
     cursor: pointer;
+    align-items: center;
     gap: 5px;
     font-weight: bold;
-    color: #ff4444;
+    flex-direction: row;
 }
 
 #btn-alt-delete-confirm.active {
