@@ -38,6 +38,7 @@
 
 .dragClose {
     height: 20px !important;
+    z-index: 2000;
 }
 
 /* ===== 扩展触控热区 ===== */
