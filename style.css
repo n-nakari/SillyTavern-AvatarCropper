@@ -5,7 +5,7 @@
     opacity: 1 !important;
     background: rgba(0, 0, 0, 0.5) !important;
     border-radius: 8px;
-    padding: 5px 15px 5px 0;
+    padding: 5px 0;
 }
 
 .st-avatar-injected-btns {
@@ -23,8 +23,8 @@
     cursor: pointer;
     align-items: center;
     justify-content: center;
-    padding: 0 10px;
-    line-height: 1;
+    margin: 0 10px;
+    padding: 0;
 }
 
 .zoomed_avatar .panelControlBar .drag-grabber.fa-solid,
@@ -37,7 +37,7 @@
 }
 
 .dragClose {
-    height: 20px !important;
+    height: 18px !important;
 }
 
 /* ===== 扩展触控热区 ===== */
@@ -101,7 +101,6 @@
 
 #st-alt-avatar-panel .alt-avatar-item.selected {
     border: 2px solid #4CAF50;
-    box-shadow: 0 0 10px rgba(76, 175, 80, 0.8);
 }
 
 #st-alt-avatar-panel .alt-avatar-item img {
