@@ -129,10 +129,12 @@ async function uploadToBackendExact(base64Data, exactFilename) {
 
 async function deleteFromBackend(path) {
     try {
+        // 清理路径中的浏览器缓存时间戳（如有），还原为真实的后端文件路径
+        const cleanPath = path.split('?')[0];
         await fetch('/api/images/delete', {
             method: 'POST',
             headers: getRequestHeaders(),
-            body: JSON.stringify({ path: path })
+            body: JSON.stringify({ path: cleanPath })
         });
     } catch (e) {
         console.error('Delete from backend failed', e);
@@ -579,8 +581,11 @@ async function triggerNativeCropPopup(imgSrc, avatarId, isUser, zoomedDiv) {
         const path = await uploadToBackendExact(croppedImageBase64, exactFilename);
         if (!path) return toastr.error('无法保存图片');
 
+        // 在保存配置时加入时间戳强制浏览器刷新图片缓存，避免显示旧图
+        const cacheBusterPath = `${path}?t=${Date.now()}`;
+        
         // 仅将裁切图设为临时覆盖（不进入图库）
-        extension_settings.avatarThemeCrops[theme][avatarId][baseImageKey] = path;
+        extension_settings.avatarThemeCrops[theme][avatarId][baseImageKey] = cacheBusterPath;
         
         saveSettingsDebounced();
         applyAvatarCss(); 
