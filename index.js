@@ -146,7 +146,9 @@ async function deleteFromBackend(path) {
 async function getBase64FromUrl(url) {
     if (url.startsWith('data:image')) return url;
     try {
-        const data = await fetch(url);
+        // 增加时间戳防止浏览器严格缓存导致读取失败
+        const fetchUrl = url.includes('?') ? url : `${url}?t=${Date.now()}`;
+        const data = await fetch(fetchUrl);
         if (!data.ok) throw new Error(`HTTP 状态码: ${data.status}`);
         const blob = await data.blob();
         return new Promise((resolve, reject) => {
@@ -157,7 +159,7 @@ async function getBase64FromUrl(url) {
         });
     } catch (error) {
         console.error("图片转Base64失败: ", error);
-        throw error; // 向外抛出以便上层精准捕获
+        throw error; // 向外抛出以便精准捕获
     }
 }
 
@@ -359,9 +361,11 @@ async function openGallery(isUser, avatarId, originalSrc, zoomedDiv) {
         function renderGrid() {
             grid.innerHTML = '';
             
+            // 强制构造纯净的原图绝对路径，避免因为 DOM src 错乱导致的缩略图破损
+            const cleanOriginalSrc = isUser ? `/User Avatars/${encodeURIComponent(avatarId)}` : `/characters/${encodeURIComponent(avatarId)}`;
             const origDiv = document.createElement('div');
             origDiv.className = 'alt-avatar-item original-item' + (!tempSelectedPath ? ' selected' : '');
-            origDiv.innerHTML = `<img src="${originalSrc}" title="解除绑定 (恢复原图)" onerror="this.src='img/ai4.png'">`;
+            origDiv.innerHTML = `<img src="${cleanOriginalSrc}" title="解除绑定 (恢复原图)" onerror="this.src='img/ai4.png'">`;
             origDiv.onclick = () => selectAvatar(null);
             grid.appendChild(origDiv);
             
@@ -547,11 +551,13 @@ async function triggerNativeCropPopup(imgSrc, avatarId, isUser, zoomedDiv) {
 
     const theme = getCurrentTheme();
     const baseImageKey = extension_settings.avatarThemeBindings?.[theme]?.[avatarId] || avatarId;
-    let sourcePath = extension_settings.avatarThemeBindings?.[theme]?.[avatarId] || imgSrc;
+    let sourcePath = extension_settings.avatarThemeBindings?.[theme]?.[avatarId];
 
-    // 智能修正路径：如果 sourcePath 仅仅是个单纯的文件名，补齐前缀供 fetch 调用，防止报404错误
-    if (!sourcePath.includes('/') && !sourcePath.startsWith('data:') && !sourcePath.startsWith('http')) {
-        sourcePath = isUser ? `/User Avatars/${sourcePath}` : `/characters/${sourcePath}`;
+    // 彻底解决路径错乱引发的 404 报错：如果裁切的是原图，放弃并无视 DOM 里任何乱七八糟的 src，强制转换为标准规范相对路径
+    if (!sourcePath) {
+        sourcePath = isUser ? `/User Avatars/${encodeURIComponent(avatarId)}` : `/characters/${encodeURIComponent(avatarId)}`;
+    } else if (!sourcePath.startsWith('/') && !sourcePath.startsWith('http') && !sourcePath.startsWith('data:')) {
+        sourcePath = '/' + sourcePath; // 为相对的内部裁切路径补齐斜杠
     }
 
     let base64Original;
@@ -616,7 +622,8 @@ function injectChatButton(mesNode) {
     const btn = document.createElement('div');
     btn.className = 'mes_button st-trigger-zoom-btn fa-solid fa-image-portrait';
     btn.title = '管理头像图库';
-    // 采用全局委托机制，不在这里绑定 onclick 事件，确保DOM刷新后点击仍然有效
+    
+    // 使用 insertBefore 将按钮固定放在最前面，使其不会被隐藏折叠
     btnContainer.insertBefore(btn, btnContainer.firstChild);
 }
 
@@ -736,13 +743,13 @@ setInterval(() => {
 jQuery(async () => {
     updatePluginState();
 
-    // 修复：使用全局事件委托绑定聊天快捷按钮的点击事件，无视 ST DOM 的频繁重绘销毁
+    // 采用 jQuery 全局事件委托机制绑定图库快捷键的点击事件，彻底无视 ST 频繁重绘销毁 DOM 的行为
     $(document).on('click', '.st-trigger-zoom-btn', function(e) {
         e.stopPropagation();
-        // 找到与当前按键同一条消息块的头像<img>节点
+        // 精准找到与该快捷按钮位于同一个消息区块（.mes）内的头像 img 节点
         const avatarImg = $(this).closest('.mes').find('.mesAvatarWrapper .avatar img');
         if (avatarImg.length) {
-            // 利用 jQuery 安全触发 ST 原生的放大弹窗事件
+            // 利用 jQuery 的 trigger 方法安全触发原生点击放大事件，不受 pointer-events 干扰
             avatarImg.trigger('click');
         } else {
             toastr.warning('未能找到此消息的头像元素，请重试');
