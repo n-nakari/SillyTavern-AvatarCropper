@@ -6,12 +6,16 @@ import { callGenericPopup, POPUP_TYPE, POPUP_RESULT } from '../../../popup.js';
 if (extension_settings.altAvatars) delete extension_settings.altAvatars;
 if (extension_settings.avatarCroppedImages) delete extension_settings.avatarCroppedImages;
 
-// 迁移与初始化新的数据结构（全局总开关）
+// 迁移与初始化新的数据结构（快捷按钮显示开关）
+if (extension_settings.avatarGalleryPluginEnabled !== undefined) {
+    extension_settings.avatarGalleryBtnVisible = extension_settings.avatarGalleryPluginEnabled;
+    delete extension_settings.avatarGalleryPluginEnabled;
+}
 if (extension_settings.avatarClickZoomEnabled !== undefined) {
-    extension_settings.avatarGalleryPluginEnabled = extension_settings.avatarClickZoomEnabled;
+    extension_settings.avatarGalleryBtnVisible = extension_settings.avatarClickZoomEnabled;
     delete extension_settings.avatarClickZoomEnabled;
 }
-if (extension_settings.avatarGalleryPluginEnabled === undefined) extension_settings.avatarGalleryPluginEnabled = true;
+if (extension_settings.avatarGalleryBtnVisible === undefined) extension_settings.avatarGalleryBtnVisible = true;
 
 if (!extension_settings.userGalleryImages) extension_settings.userGalleryImages = [];
 if (!extension_settings.charGalleryImages) extension_settings.charGalleryImages = {};
@@ -66,7 +70,6 @@ function getBinding(theme, avatarId) {
 // 记录当前真正有效的文件名（过滤掉临时 blob 路径）
 let lastValidAvatarId = null;
 setInterval(() => {
-    if (!extension_settings.avatarGalleryPluginEnabled) return;
     const previewImg = document.getElementById('avatar_load_preview');
     if (previewImg) {
         const src = previewImg.getAttribute('src');
@@ -196,12 +199,6 @@ async function resizeImageToBase64(file) {
 
 function applyAvatarCss() {
     let styleTag = document.getElementById('st-avatar-bindings-style');
-    
-    if (!extension_settings.avatarGalleryPluginEnabled) {
-        if (styleTag) styleTag.textContent = '';
-        return;
-    }
-
     const theme = getCurrentTheme();
     const bindings = extension_settings.avatarThemeBindings?.[theme] || {};
     const crops = extension_settings.avatarThemeCrops?.[theme] || {};
@@ -251,28 +248,34 @@ function applyAvatarCss() {
 }
 
 function updatePluginState() {
-    const isEnabled = !!extension_settings.avatarGalleryPluginEnabled;
+    const isBtnVisible = !!extension_settings.avatarGalleryBtnVisible;
     applyAvatarCss();
     
-    // 控制指针事件（兼容主题强制设定）
+    // 控制指针事件（兼容主题强制设定，始终开启）
     let pointerStyle = document.getElementById('st-avatar-crop-pointer-events');
-    if (isEnabled) {
-        if (!pointerStyle) {
-            pointerStyle = document.createElement('style');
-            pointerStyle.id = 'st-avatar-crop-pointer-events';
-            document.head.appendChild(pointerStyle);
-        }
-        pointerStyle.textContent = `
-            #chat .mes .mesAvatarWrapper .avatar, 
-            #chat .mes .mesAvatarWrapper .avatar img { pointer-events: auto !important; }
-        `;
-        
-        // 为现有的聊天消息注入快捷图库按钮
+    if (!pointerStyle) {
+        pointerStyle = document.createElement('style');
+        pointerStyle.id = 'st-avatar-crop-pointer-events';
+        document.head.appendChild(pointerStyle);
+    }
+    pointerStyle.textContent = `
+        #chat .mes .mesAvatarWrapper .avatar, 
+        #chat .mes .mesAvatarWrapper .avatar img { pointer-events: auto !important; }
+    `;
+    
+    // 动态控制聊天消息按钮的显示与隐藏
+    let btnVisibilityStyle = document.getElementById('st-avatar-btn-visibility');
+    if (!btnVisibilityStyle) {
+        btnVisibilityStyle = document.createElement('style');
+        btnVisibilityStyle.id = 'st-avatar-btn-visibility';
+        document.head.appendChild(btnVisibilityStyle);
+    }
+    
+    if (isBtnVisible) {
+        btnVisibilityStyle.textContent = ''; // 允许显示
         document.querySelectorAll('.mes').forEach(injectChatButton);
     } else {
-        if (pointerStyle) pointerStyle.remove();
-        // 清理注入的所有DOM元素
-        document.querySelectorAll('.st-trigger-zoom-btn, .st-avatar-injected-btns').forEach(el => el.remove());
+        btnVisibilityStyle.textContent = '.st-trigger-zoom-btn { display: none !important; }'; // 强制隐藏
     }
 }
 
@@ -614,7 +617,6 @@ async function triggerNativeCropPopup(imgSrc, avatarId, isUser, zoomedDiv) {
 }
 
 function injectChatButton(mesNode) {
-    if (!extension_settings.avatarGalleryPluginEnabled) return;
     const btnContainer = mesNode.querySelector('.mes_buttons');
     if (!btnContainer || btnContainer.querySelector('.st-trigger-zoom-btn')) return;
 
@@ -706,7 +708,6 @@ function injectControlBarButtons(zoomedDiv) {
 let lastTheme = getCurrentTheme();
 
 setInterval(() => {
-    if (!extension_settings.avatarGalleryPluginEnabled) return;
     const currentTheme = getCurrentTheme();
     if (currentTheme !== lastTheme) {
         lastTheme = currentTheme;
@@ -722,17 +723,17 @@ setInterval(() => {
             const container = document.createElement('div');
             container.id = 'st-avatar-features-toggle-container';
             container.className = 'flex-container alignItemsBaseline';
-            const isEnabled = !!extension_settings.avatarGalleryPluginEnabled;
+            const isVisible = !!extension_settings.avatarGalleryBtnVisible;
             container.innerHTML = `
                 <span data-i18n="Avatar Gallery Management">头像图库管理：</span>
-                <select id="st-avatar-crop-select" class="widthNatural flex1 margin0 text_pole" title="启用后开启聊天界面的头像图库面板与独立剪裁功能">
-                    <option value="false" ${!isEnabled ? 'selected' : ''}>关闭</option>
-                    <option value="true" ${isEnabled ? 'selected' : ''}>启用</option>
+                <select id="st-avatar-crop-select" class="widthNatural flex1 margin0 text_pole" title="选择是否在聊天消息右上角显示快捷图库按钮">
+                    <option value="false" ${!isVisible ? 'selected' : ''}>隐藏按钮</option>
+                    <option value="true" ${isVisible ? 'selected' : ''}>显示按钮</option>
                 </select>
             `;
             targetContainer.appendChild(container);
             document.getElementById('st-avatar-crop-select').addEventListener('change', (e) => {
-                extension_settings.avatarGalleryPluginEnabled = (e.target.value === 'true');
+                extension_settings.avatarGalleryBtnVisible = (e.target.value === 'true');
                 saveSettingsDebounced();
                 updatePluginState();
             });
@@ -758,7 +759,6 @@ jQuery(async () => {
     
     // 监听原生上传动作，做配置继承清洗
     document.body.addEventListener('change', (e) => {
-        if (!extension_settings.avatarGalleryPluginEnabled) return;
         if (e.target && e.target.tagName === 'INPUT' && e.target.type === 'file') {
             const id = e.target.id;
             if (['add_avatar_button', 'character_replace_file', 'avatar_upload_file', 'group_avatar_button'].includes(id)) {
@@ -822,7 +822,6 @@ jQuery(async () => {
     console.log('[Avatar Gallery & Cropper] Successfully Loaded.');
 
     const observer = new MutationObserver((mutations) => {
-        if (!extension_settings.avatarGalleryPluginEnabled) return;
         mutations.forEach((mutation) => {
             mutation.addedNodes.forEach((node) => {
                 if (node.nodeType === Node.ELEMENT_NODE) {
