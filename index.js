@@ -157,7 +157,7 @@ async function getBase64FromUrl(url) {
         });
     } catch (error) {
         console.error("图片转Base64失败: ", error);
-        throw error;
+        throw error; // 向外抛出以便上层精准捕获
     }
 }
 
@@ -252,7 +252,7 @@ function updatePluginState() {
     const isEnabled = !!extension_settings.avatarGalleryPluginEnabled;
     applyAvatarCss();
     
-    // 控制指针事件（为了兼容极端主题）
+    // 控制指针事件（兼容主题强制设定）
     let pointerStyle = document.getElementById('st-avatar-crop-pointer-events');
     if (isEnabled) {
         if (!pointerStyle) {
@@ -549,7 +549,7 @@ async function triggerNativeCropPopup(imgSrc, avatarId, isUser, zoomedDiv) {
     const baseImageKey = extension_settings.avatarThemeBindings?.[theme]?.[avatarId] || avatarId;
     let sourcePath = extension_settings.avatarThemeBindings?.[theme]?.[avatarId] || imgSrc;
 
-    // 智能修正路径：如果 sourcePath 只有文件名，需要补齐前缀供 fetch 调用，防止报404错误
+    // 智能修正路径：如果 sourcePath 仅仅是个单纯的文件名，补齐前缀供 fetch 调用，防止报404错误
     if (!sourcePath.includes('/') && !sourcePath.startsWith('data:') && !sourcePath.startsWith('http')) {
         sourcePath = isUser ? `/User Avatars/${sourcePath}` : `/characters/${sourcePath}`;
     }
@@ -558,7 +558,7 @@ async function triggerNativeCropPopup(imgSrc, avatarId, isUser, zoomedDiv) {
     try {
         base64Original = await getBase64FromUrl(sourcePath);
     } catch (e) {
-        toastr.error(`<b>图片加载失败！</b><br/>路径: <i>${sourcePath}</i><br/>原因: ${e.message}<br/>建议: 请检查该角色头像是否存在或尝试从图库重新选择。`, '获取原图报错', {timeOut: 8000, escapeHtml: false});
+        toastr.error(`<b>获取原图数据失败！无法裁剪。</b><br/>路径: <i>${sourcePath}</i><br/>原因: ${e.message}<br/>建议: 该头像原文件可能已丢失或损坏，请尝试从图库重新上传。`, '插件报错提示', {timeOut: 8000, escapeHtml: false});
         return;
     }
 
@@ -612,24 +612,11 @@ function injectChatButton(mesNode) {
     const btnContainer = mesNode.querySelector('.mes_buttons');
     if (!btnContainer || btnContainer.querySelector('.st-trigger-zoom-btn')) return;
 
+    // 创建一个伪装成原生消息按钮的快捷图标
     const btn = document.createElement('div');
-    // 添加到 .mes_button 使其与其他消息按钮外观一致
     btn.className = 'mes_button st-trigger-zoom-btn fa-solid fa-image-portrait';
     btn.title = '管理头像图库';
-    
-    btn.onclick = (e) => {
-        e.stopPropagation();
-        // 查找属于此消息块的头像并触发原生的点击放大事件
-        const avatarImg = mesNode.querySelector('.mesAvatarWrapper .avatar img');
-        if (avatarImg) {
-            // 使用 dispatchEvent 以绕过可能存在的 pointer-events: none 限制
-            avatarImg.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-        } else {
-            toastr.warning('未能找到此消息的头像元素');
-        }
-    };
-    
-    // 注入到按钮区最前面，保证可以直接点击
+    // 采用全局委托机制，不在这里绑定 onclick 事件，确保DOM刷新后点击仍然有效
     btnContainer.insertBefore(btn, btnContainer.firstChild);
 }
 
@@ -720,7 +707,7 @@ setInterval(() => {
     }
 }, 1000);
 
-// 创建设置开关 UI
+// 创建设置界面的控制开关 UI
 setInterval(() => {
     try {
         const targetContainer = document.querySelector("#UI-Theme-Block > div.flex-container.flexFlowColumn.flexNoGap > div.flex-container.flexFlowColumn");
@@ -731,7 +718,7 @@ setInterval(() => {
             const isEnabled = !!extension_settings.avatarGalleryPluginEnabled;
             container.innerHTML = `
                 <span data-i18n="Avatar Gallery Management">头像图库管理：</span>
-                <select id="st-avatar-crop-select" class="widthNatural flex1 margin0 text_pole" title="启用后允许设置聊天消息头像及启用图库面板">
+                <select id="st-avatar-crop-select" class="widthNatural flex1 margin0 text_pole" title="启用后开启聊天界面的头像图库面板与独立剪裁功能">
                     <option value="false" ${!isEnabled ? 'selected' : ''}>关闭</option>
                     <option value="true" ${isEnabled ? 'selected' : ''}>启用</option>
                 </select>
@@ -748,8 +735,21 @@ setInterval(() => {
 
 jQuery(async () => {
     updatePluginState();
+
+    // 修复：使用全局事件委托绑定聊天快捷按钮的点击事件，无视 ST DOM 的频繁重绘销毁
+    $(document).on('click', '.st-trigger-zoom-btn', function(e) {
+        e.stopPropagation();
+        // 找到与当前按键同一条消息块的头像<img>节点
+        const avatarImg = $(this).closest('.mes').find('.mesAvatarWrapper .avatar img');
+        if (avatarImg.length) {
+            // 利用 jQuery 安全触发 ST 原生的放大弹窗事件
+            avatarImg.trigger('click');
+        } else {
+            toastr.warning('未能找到此消息的头像元素，请重试');
+        }
+    });
     
-    // 监听原生上传动作
+    // 监听原生上传动作，做配置继承清洗
     document.body.addEventListener('change', (e) => {
         if (!extension_settings.avatarGalleryPluginEnabled) return;
         if (e.target && e.target.tagName === 'INPUT' && e.target.type === 'file') {
