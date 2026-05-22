@@ -41,6 +41,17 @@
     z-index: 2000;
 }
 
+/* ===== 快捷呼出图库按钮 ===== */
+.st-trigger-zoom-btn {
+    /* 继承了原生的 .mes_button 已经有很多属性，这里微调确保视觉和谐 */
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.st-trigger-zoom-btn:hover {
+    color: var(--SmartThemeQuoteColor, #ffcc00);
+}
+
 /* ===== 扩展触控热区 ===== */
 
 .cropper-line::after {
