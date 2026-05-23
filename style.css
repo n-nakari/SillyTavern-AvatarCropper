@@ -1,5 +1,4 @@
 /* ===== 剪裁头像及控制栏 ===== */
-
 .zoomed_avatar .panelControlBar {
     align-items: center;
     opacity: 1 !important;
@@ -41,8 +40,12 @@
     z-index: 2000;
 }
 
-/* ===== 扩展触控热区 ===== */
+/* ===== 快捷呼出图库按钮 ===== */
+.st-trigger-zoom-btn {
+    cursor: pointer;
+}
 
+/* ===== 扩展触控热区 ===== */
 .cropper-line::after {
     content: '';
     position: absolute;
@@ -77,7 +80,6 @@
 }
 
 /* ===== 图库面板 ===== */
-
 #st-alt-avatar-panel .alt-avatar-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
