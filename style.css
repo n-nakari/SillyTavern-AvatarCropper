@@ -145,3 +145,11 @@
 #btn-alt-delete-confirm.active {
     display: flex !important;
 }
+
+.zoomed_avatar, .zoomed_avatar_container {
+    max-height: 80dvh !important;
+}
+
+.zoomed_avatar img, .zoomed_avatar_container img {
+    max-height: 80dvh !important;
+}
